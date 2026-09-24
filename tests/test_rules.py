@@ -241,6 +241,16 @@ class NoClassificationTest(unittest.TestCase):
         sub = rules.assess_substance({"found": False, "name": "novel ligand", "primary": None})
         self.assertEqual(list(sub.exposure), list(rules.EXPOSURE_ROUTES))
 
+    def test_a_name_that_resolved_to_nothing_is_not_a_compound_nobody_classified(self):
+        """One sends you to the SDS; the other sends you to the CAS number."""
+        sub = rules.assess_substance(
+            {"found": False, "cid": None, "name": "compound 7b", "primary": None})
+        self.assertIn("NAME NOT RESOLVED", sub.hazards_text)
+        self.assertIn("not the same as", " ".join(sub.review))
+        resolved = rules.assess_substance(
+            {"found": False, "cid": 516892, "name": "sodium bicarbonate", "primary": None})
+        self.assertIn("NO CLASSIFICATION FOUND", resolved.hazards_text)
+
     def test_a_lookup_that_never_answered_is_not_a_lookup_that_found_nothing(self):
         sub = rules.assess_substance(
             {"found": False, "unreachable": True, "name": "toluene", "primary": None})

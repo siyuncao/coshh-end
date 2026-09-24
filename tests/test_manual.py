@@ -36,11 +36,16 @@ from coshh.rules import (  # noqa: E402
 # Stand-ins
 # --------------------------------------------------------------------------
 
-def pubchem(name, *codes, cas="", found=True):
-    """The shape `safety.hazards()` returns, trimmed to the fields rules reads."""
+def pubchem(name, *codes, cas="", found=True, cid=None):
+    """The shape `safety.hazards()` returns, trimmed to the fields rules reads.
+
+    `cid` matters when `found` is False: a cid means PubChem resolved the
+    compound and holds no classification for it, and no cid means the search
+    term matched nothing at all. They are different failures.
+    """
     return {
         "found": found,
-        "cid": 1140 if found else None,
+        "cid": (1140 if found else cid),
         "name": name,
         "cas": cas,
         "url": "https://pubchem.ncbi.nlm.nih.gov/compound/1140" if found else None,
@@ -143,7 +148,7 @@ class NothingSilentlyDroppedTest(unittest.TestCase):
         out = manual.assess(
             "method",
             extractor=extractor(substances=[substance("ethyl 4-oxo-hexanoate", "1.2 g")]),
-            lookup=looker({}))
+            lookup=lambda name, cas="": pubchem(name, found=False, cid=516892))
         row = row_for(out, "ethyl 4-oxo-hexanoate")
         self.assertFalse(row["classified"])
         self.assertIn("NO CLASSIFICATION FOUND", row["hazards_text"])

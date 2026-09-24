@@ -515,6 +515,13 @@ def _substance_row(assessment: rules.SubstanceAssessment,
     }
 
 
+def _differs(a: str, b: str) -> bool:
+    """Whether two chemical names are different enough to be worth a review line."""
+    def key(text: str) -> str:
+        return "".join(ch for ch in str(text).lower() if ch.isalnum())
+    return key(a) != key(b)
+
+
 def _provenance(found: Dict[str, Any], assessment: rules.SubstanceAssessment) -> str:
     """One line saying who classified this substance, and which compound it was.
 
@@ -640,19 +647,24 @@ def assess(text: str, *, title: str = "", name: str = "", date: str = "",
                 " or ".join(repr(t) for t in dict.fromkeys(tried)) +
                 " in PubChem, so nothing was looked up at all. This is not 'no classification "
                 f"found' — look it up by CAS number or on the supplier's safety data sheet.")
-        elif found.get("resolved_title"):
-            # Never a silent hit. PubChem's resolver maps a near-miss onto a
-            # different molecule — 'PEG' comes back as CID 174, Ethylene Glycol —
-            # and the codes are then real and belong to something else.
-            review.append(
-                f"{item['name']} was looked up as {searched!r} and PubChem answered with CID "
-                f"{found['cid']}, {found['resolved_title']!r}. Check that is the same substance "
-                f"before the codes below are believed.")
-        elif item["lookup_name"]:
-            review.append(
-                f"{item['name']} was looked up in PubChem as {item['lookup_name']!r}. "
-                f"The hazards below are that substance's; if the concentration or grade "
-                f"in this procedure changes them, correct the row by hand.")
+        else:
+            if item["lookup_name"]:
+                review.append(
+                    f"{item['name']} was looked up in PubChem as {item['lookup_name']!r}. "
+                    f"The hazards below are that substance's; if the concentration or grade "
+                    f"in this procedure changes them, correct the row by hand.")
+            # Never a silent *substitution*. PubChem's resolver maps a near-miss
+            # onto a different molecule — 'PEG' comes back as CID 174, Ethylene
+            # Glycol — and the codes are then real and belong to something else.
+            # A title that is just the search term back again is not news: every
+            # row carries its CID in the Hazards cell either way, and a review
+            # list padded with non-events is a review list nobody finishes.
+            title = found.get("resolved_title") or ""
+            if title and _differs(title, searched) and _differs(title, item["name"]):
+                review.append(
+                    f"{item['name']} was looked up as {searched!r} and PubChem answered with CID "
+                    f"{found['cid']}, titled {title!r} — a different name from the one asked for. "
+                    f"Check it is the same substance before the codes below are believed.")
     # `safety.hazards` echoes the name it was asked for, which is the key
     # `rules.assess_form` uses to find the amount and the formula.
     amounts = {item["name"]: item["amount"] for item in used}

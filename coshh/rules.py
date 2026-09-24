@@ -915,7 +915,10 @@ _PROCEDURE_CONTROLS: Tuple[Tuple[str, str, str], ...] = (
                    r"\bportion-?wise\b|\bin\s+(?:small\s+)?portions\b",
      "the method itself says the addition is slow, dropwise or portionwise, which is a rate control and belongs "
      "on the form"),
-    (WATER_BATH, r"\bwater\s*bath\b|\boil\s*bath\b|\bheat(?:ed|ing)?\s+to\s+\d|\breflux",
+    # An ice-water bath is cooling, and ticking "heat using ... water bath" for it
+    # is a control measure the form asserts and the method contradicts.
+    (WATER_BATH, r"(?<!ice-)(?<!ice )\bwater\s*bath\b|\boil\s*bath\b|"
+                 r"\bheat(?:ed|ing)?\s+to\s+\d|\breflux",
      "the method heats the reaction, so the bath is the controlled way to do it"),
     (FUMEHOOD, r"\bfume\s*(?:hood|cupboard)\b|\bunder\s+nitrogen\b|\bunder\s+argon\b|\bSchlenk\b",
      "the method already places the work in a hood or on a line"),
@@ -1096,6 +1099,11 @@ def waste_streams(substances: Sequence["SubstanceAssessment"] = (), *,
             if why not in reasons[stream]:
                 reasons[stream].append(f"{name}: {why}")
             matched = True
+        if any(code in ("H260", "H261") for code in substance.codes):
+            reasons[NAMED_WASTE].append(
+                f"{name}: it releases flammable gas on contact with water (H260/H261), so the residue is "
+                f"quenched deliberately and goes to its own labelled container, never into an aqueous bottle")
+            matched = True
         if not matched:
             reasons[NAMED_WASTE].append(
                 f"{name}: not recognised as a standard solvent or reagent, so it goes to named waste until "
@@ -1103,10 +1111,6 @@ def waste_streams(substances: Sequence["SubstanceAssessment"] = (), *,
             review.append(
                 f"Waste stream for {name} was not recognised — label its container by name and check with a "
                 f"technician which stream it belongs to.")
-        if any(code in ("H260", "H261") for code in substance.codes):
-            reasons[NAMED_WASTE].append(
-                f"{name}: it releases flammable gas on contact with water (H260/H261), so the residue is "
-                f"quenched deliberately and goes to its own labelled container, never into an aqueous bottle")
         for code in substance.codes:
             rule = lookup(code)
             if rule and rule.hazard_class.startswith("Hazardous to the aquatic"):
@@ -1274,6 +1278,18 @@ _UNREACHABLE_WHY = (
     "until somebody checks it by hand"
 )
 
+#: The third case, and the one that used to be reported as the first: the search
+#: term matched no compound at all. "Nobody has classified it" sends a reader to
+#: the SDS for a substance that exists; this sends them to the CAS number,
+#: because the tool does not yet know which substance was meant.
+_UNRESOLVED_HAZARDS_TEXT = "NAME NOT RESOLVED - no compound of this name was found to look up"
+
+_UNRESOLVED_REVIEW = (
+    "No compound matching {name} was found, so nothing was looked up at all. That is not the same as "
+    "'no classification found': search by CAS number, or read the supplier's safety data sheet, and fill "
+    "this row in by hand."
+)
+
 #: A water-reactive substance that this very method puts into water. The tick
 #: stays — the code is still true — but a ticked control that the procedure
 #: contradicts, with nothing said about it, is worse than no tick at all.
@@ -1311,7 +1327,15 @@ def assess_substance(hazard: Optional[Dict] = None, *, name: str = "", cas: str 
 
     if not hazard.get("found") or not codes:
         unreachable = bool(hazard.get("unreachable"))
-        why = _UNREACHABLE_WHY if unreachable else _NO_DATA_WHY
+        # `cid` present and None means PubChem resolved no compound for the term.
+        # Absent means nothing was ever looked up, which is the no-data case.
+        unresolved = not unreachable and "cid" in hazard and hazard.get("cid") is None
+        if unreachable:
+            banner, line, why = _UNREACHABLE_HAZARDS_TEXT, _UNREACHABLE_REVIEW, _UNREACHABLE_WHY
+        elif unresolved:
+            banner, line, why = _UNRESOLVED_HAZARDS_TEXT, _UNRESOLVED_REVIEW, _NO_DATA_WHY
+        else:
+            banner, line, why = _NO_DATA_HAZARDS_TEXT, _NO_DATA_REVIEW, _NO_DATA_WHY
         # Conservative when unsure: the fallback the table already uses for an
         # unrecognised H3xx code, plus Eyes, because nothing rules it out either.
         fallback_routes, fallback_controls, _risks, _fw = _FALLBACK["3"]
@@ -1321,14 +1345,13 @@ def assess_substance(hazard: Optional[Dict] = None, *, name: str = "", cas: str 
             controls[option] = Tick(option=option, why=why)
         return SubstanceAssessment(
             name=name, cas=cas, amount=amount, classified=False,
-            hazards_text=_UNREACHABLE_HAZARDS_TEXT if unreachable else _NO_DATA_HAZARDS_TEXT,
+            hazards_text=banner,
             codes=(), unknown_codes=(),
             exposure={route: Tick(option=route, why=why)
                       for route in EXPOSURE_ROUTES if route in routes},
             controls=controls,
             risks=(),
-            review=((_UNREACHABLE_REVIEW if unreachable else _NO_DATA_REVIEW).format(
-                name=name or "this substance"),),
+            review=(line.format(name=name or "this substance"),),
             source=primary.get("source", ""), url=hazard.get("url") or "",
         )
 
