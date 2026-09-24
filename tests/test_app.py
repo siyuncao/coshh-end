@@ -35,7 +35,7 @@ def assessment():
         "concentrated nitric acid (1.5 mL) dropwise at 0 C using an ice bath. "
         "Ganymedene (3 g) was then added.",
         title="Nitration of toluene", name="A Chemist", date="2026-09-24",
-        college="Somerville", year="2",
+        college="Example College", year="2",
         extractor=extractor(
             scheme="Nitration of toluene",
             substances=[substance("toluene", "2.12 g, 23 mmol"),
@@ -211,10 +211,10 @@ class HeaderTest(unittest.TestCase):
 
     def test_header_fields_are_taken_from_the_form_verbatim(self):
         data = assessment()
-        pairs = form_pairs(data, title="Something else", college="Balliol")
+        pairs = form_pairs(data, title="Something else", college="Another College")
         folded = fold(pairs)
         self.assertEqual(folded["title"], "Something else")
-        self.assertEqual(folded["college"], "Balliol")
+        self.assertEqual(folded["college"], "Another College")
 
     def test_approved_by_is_not_a_field_anywhere_on_the_page(self):
         body = webapp.draft_body(assessment())
