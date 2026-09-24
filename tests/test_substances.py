@@ -499,6 +499,7 @@ class TheDefaultPathThroughTheApp(unittest.TestCase):
 
         import app as webapp
 
+        self.webapp = webapp
         self.client = TestClient(webapp.app)
         self.saved_key = os.environ.pop("ANTHROPIC_API_KEY", None)
         self.real_hazards = safety.hazards
@@ -532,6 +533,50 @@ class TheDefaultPathThroughTheApp(unittest.TestCase):
     def test_an_empty_list_is_refused(self):
         response = self.client.post("/draft", data={"substances": "   \n  "})
         self.assertIn("Nothing to", response.text)
+
+    def test_a_key_sent_with_a_list_changes_nothing_and_is_not_needed(self):
+        """A key the browser filled in must never decide anything on this path.
+
+        The page is one form, so the box and the list share it. The script
+        disables the box before the request leaves, but a key that arrives
+        anyway must not turn the keyless path into the paid one.
+        """
+        response = self.client.post("/draft", data={
+            "substances": LIST, "api_key": "sk-ant-notarealkey-0123456789"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("pyrrolidine", response.text)
+        self.assertNotIn("sk-ant-notarealkey-0123456789", response.text)
+
+    def test_the_page_says_the_key_is_only_for_a_procedure(self):
+        body = self.client.get("/").text
+        self.assertIn("only when you submit a procedure", body)
+        # And the script takes the box out of a submit that carries a list.
+        self.assertIn("box.disabled = true", body)
+
+    def test_a_blank_amount_note_is_dropped_once_the_amount_is_filled_in(self):
+        """The review block must not argue with the cell printed beside it."""
+        data = assessed()
+        self.assertTrue(any(substances.is_no_amount_note(line, "silica gel")
+                            for line in data["review"]), data["review"])
+        folded = self.webapp.corrected(data, self.form_for(data, amount_3="2 g"))
+        self.assertEqual("2 g", folded["substances"][3]["amount"])
+        self.assertFalse(any(substances.is_no_amount_note(line, "silica gel")
+                             for line in folded["review"]), folded["review"])
+        self.assertFalse(any("Amount cell is blank" in line
+                             for line in folded["review"]), folded["review"])
+
+    def test_clearing_an_amount_is_said_out_loud_rather_than_left_blank(self):
+        data = assessed()
+        folded = self.webapp.corrected(data, self.form_for(data, amount_0=""))
+        self.assertEqual("", folded["substances"][0]["amount"])
+        self.assertTrue(any("pyrrolidine" in line and "Amount cell is blank" in line
+                            for line in folded["review"]), folded["review"])
+
+    @staticmethod
+    def form_for(data, **overrides):
+        from tests.test_app import FakeForm, form_pairs
+
+        return FakeForm(form_pairs(data, **overrides))
 
 
 if __name__ == "__main__":

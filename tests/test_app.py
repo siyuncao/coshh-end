@@ -12,9 +12,11 @@ No network: the assessment fixture is produced by running `manual.assess` with
 the same injected fakes the reader's own tests use.
 """
 
+import io
 import json
 import os
 import unittest
+import zipfile
 
 from fastapi.testclient import TestClient
 
@@ -216,6 +218,23 @@ class UnassessedTest(unittest.TestCase):
         row = row_named(fold(form_pairs(self.data)), "ganymedene")
         self.assertTrue(row["unknown"])
 
+    def test_a_row_that_never_had_hazards_is_not_accused_of_losing_them(self):
+        """`ganymedene` came back unclassified; nobody touched its box.
+
+        On the list path an unclassified row is common, so accusing the chemist
+        of wiping a box that was empty from the draft would print a false
+        review line on most forms — beside the true one saying the same
+        substance has no classification.
+        """
+        folded = fold(form_pairs(self.data))          # nothing edited at all
+        row = row_named(folded, "ganymedene")
+        self.assertEqual([], row["hazards"])
+        self.assertTrue(row["unknown"])
+        self.assertFalse(any("deleted by hand" in line for line in folded["review"]),
+                         folded["review"])
+        # The honest note about the same row is still there.
+        self.assertTrue(any("ganymedene" in line for line in folded["review"]))
+
     def test_dropping_a_row_is_recorded_rather_than_silent(self):
         pairs = [(k, v) for k, v in form_pairs(self.data) if k != "include_2"]
         folded = fold(pairs)
@@ -276,7 +295,11 @@ class RouteTest(unittest.TestCase):
     def test_an_empty_paste_is_refused_before_any_model_call(self):
         response = self.client.post("/draft", data={"manual": "   "})
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Nothing to read", response.text)
+        self.assertIn("Nothing to assess", response.text)
+        # The default path is named first: a visitor who mis-clicked should not
+        # be pointed straight at the one path that will ask them for a key.
+        self.assertLess(response.text.index("List the substances"),
+                        response.text.index("paste the experimental procedure"))
 
     def test_document_without_a_baseline_fails_cleanly(self):
         response = self.client.post("/document", data={"baseline": "not json"})
@@ -522,8 +545,115 @@ class ApiKeyTest(unittest.TestCase):
         response = self.client.post(
             "/draft", data={"manual": "  ", "api_key": self.FAKE_KEY})
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Nothing to read", response.text)
+        self.assertIn("Nothing to assess", response.text)
         self.assertEqual([], self.calls)
+
+    def test_a_rejected_key_is_a_sentence_and_not_an_sdk_traceback(self):
+        """The likeliest failure on this path deserves better than a repr.
+
+        `coshh.manual` turns the SDK's 401 into `KeyRefused`; this is the half
+        of that the visitor reads.
+        """
+        self.record(raises=webapp.manual.KeyRefused(
+            "Anthropic would not accept that key. Check it at {} — or use the substance "
+            "list instead, which needs no key and no model. Nothing has been read, and "
+            "nothing has been charged.".format(webapp.manual.KEY_CONSOLE_URL)))
+        response = self.client.post(
+            "/draft", data={"manual": "Dissolve toluene.", "api_key": self.FAKE_KEY})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("would not accept that key", response.text)
+        self.assertIn("console.anthropic.com", response.text)
+        self.assertIn("needs no key", response.text)
+        self.assertNotIn("AuthenticationError", response.text)
+        self.assertNotIn(self.FAKE_KEY, response.text)
+
+    def test_the_key_box_on_a_refusal_carries_no_value(self):
+        """A refusal re-renders the form; the key comes back from the browser."""
+        self.record()
+        response = self.client.post(
+            "/draft", data={"manual": "   ", "api_key": self.FAKE_KEY})
+        self.assertIn('name="api_key"', response.text)     # the box is there
+        self.assertNotIn(self.FAKE_KEY, response.text)     # its value is not
+
+
+class KeepingWhatWasTypedTest(unittest.TestCase):
+    """A refusal that empties the form is how a forty-line list gets retyped."""
+
+    def setUp(self):
+        self.client = TestClient(webapp.app)
+        self.env = dict(os.environ)
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.env)
+
+    def test_a_refusal_puts_the_substance_list_back(self):
+        response = self.client.post("/draft", data={
+            "substances": "acetone 5 mL\ntoluene 2 mL",
+            "manual": "To a stirred solution of ...",
+            "title": "Amide coupling", "name": "A Chemist", "year": "2"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Two different inputs", response.text)
+        self.assertIn("acetone 5 mL", response.text)
+        self.assertIn("To a stirred solution of ...", response.text)
+        self.assertIn('value="Amide coupling"', response.text)
+        self.assertIn('value="2" selected', response.text.replace(
+            '<option value="2" selected>', 'value="2" selected>'))
+
+    def test_a_refusal_still_offers_a_way_to_start_again(self):
+        response = self.client.post("/draft", data={"substances": "", "manual": ""})
+        self.assertIn("Start again", response.text)
+
+
+class UploadLimitTest(unittest.TestCase):
+    """A public instance is on the far side of somebody else's imagination."""
+
+    def setUp(self):
+        self.client = TestClient(webapp.app)
+
+    def test_a_body_that_declares_itself_enormous_is_refused_unread(self):
+        response = self.client.post(
+            "/draft", data={"manual": "x"},
+            headers={"content-length": str(webapp.MAX_BODY_BYTES + 1)})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("too big", response.text)
+        self.assertIn("Nothing was read", response.text)
+
+    def test_a_zip_claiming_to_expand_to_a_gigabyte_is_refused_unexpanded(self):
+        """A .docx is a zip, and python-docx expands it with no ratio check."""
+        payload = self.bomb()
+        self.assertLess(len(payload), webapp.MAX_UPLOAD_BYTES, "the bomb is small")
+        with self.assertRaises(webapp.UploadRefused) as cm:
+            webapp.text_from_upload("manual.docx", payload)
+        self.assertIn("expand", str(cm.exception))
+
+    def test_the_route_says_so_plainly_rather_than_falling_over(self):
+        response = self.client.post(
+            "/draft", files={"upload": ("manual.docx", self.bomb(),
+                                        "application/vnd.openxmlformats-officedocument."
+                                        "wordprocessingml.document")})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("too big", response.text)
+
+    def test_a_real_docx_is_still_read(self):
+        """The guard is on size, and a page of text is not big."""
+        import docx
+
+        document = docx.Document()
+        document.add_paragraph("Dissolve 2 g of benzoic acid in 20 mL of ethanol.")
+        buffer = io.BytesIO()
+        document.save(buffer)
+        self.assertIn("benzoic acid",
+                      webapp.text_from_upload("manual.docx", buffer.getvalue()))
+
+    @staticmethod
+    def bomb():
+        """A tiny zip whose entries claim to expand to far more than the cap."""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+            bundle.writestr("word/document.xml", b"\0" * (webapp.MAX_EXPANDED_BYTES + 1))
+        return buffer.getvalue()
 
 
 class UploadTest(unittest.TestCase):

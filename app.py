@@ -25,7 +25,10 @@ a file. `Approved By` is left blank by the writer and cannot be filled in here.
 Reading prose is the only step that needs a language model, and the model call
 is the only step that costs money. So the key is the visitor's: `POST /draft`
 takes an Anthropic API key from the submitted form, hands it to that one call,
-and forgets it when the request ends. It is never written to disk, never logged,
+and forgets it when the request ends. The page is a single form, so the box and
+the substance list share it — and the key box is disabled before a submit that
+carries a list, because a credential that crosses the wire on a path designed
+to need none is a credential needlessly exposed. It is never written to disk, never logged,
 never put in a URL, and never echoed back into a page — the key lives in the
 visitor's own browser (localStorage) and nowhere on this server. If the process
 running the app has `ANTHROPIC_API_KEY` set, that is the owner running it
@@ -49,6 +52,7 @@ import json
 import os
 import tempfile
 import unicodedata
+import zipfile
 from urllib.parse import quote
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -69,6 +73,23 @@ TEMPLATE_PATH = os.environ.get("COSHH_TEMPLATE") or None
 #: A paste box is not an upload endpoint; refuse anything absurd early.
 MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 
+#: The whole POST body, checked before anything is read. `request.form()`
+#: buffers the entire request (spooling it to disk) before any handler gets a
+#: chance to refuse it, so a limit applied to the file afterwards is a limit on
+#: nothing. The slack over `MAX_UPLOAD_BYTES` is the pasted text and the header
+#: fields travelling in the same multipart body.
+MAX_BODY_BYTES = MAX_UPLOAD_BYTES + 1024 * 1024
+
+#: A .docx is a zip, and `docx.Document` expands it in memory with no ratio
+#: check at all, so a compression bomb well inside the upload limit can take
+#: the process out. Four times the limit is roomy for a real document with
+#: images in it and nowhere near a bomb's ratio.
+MAX_EXPANDED_BYTES = 4 * MAX_UPLOAD_BYTES
+
+
+class UploadRefused(ValueError):
+    """The upload was too big, or claimed to expand to something absurd."""
+
 STANDING_NOTE = (
     "This is a draft. A competent person reads it, corrects it and signs it. "
     "Approved By and its date are left blank on purpose — this tool does not sign forms."
@@ -85,17 +106,19 @@ KEY_CONSOLE_URL = "https://console.anthropic.com/settings/keys"
 
 #: The one plain sentence the page owes the visitor about their key.
 KEY_NOTE = (
-    "Your key is sent with this one request, used for the single model call that reads "
-    "your manual, and then forgotten: it is never written to disk, never logged, never "
-    "put in a web address and never sent back to this page. It is remembered in your own "
-    "browser (localStorage) so you need not retype it, and you can clear it there."
+    "Your key is sent only when you submit a procedure — never with a substance list — "
+    "and then it is used for that single model call and forgotten: it is never written "
+    "to disk, never logged, never put in a web address and never sent back to this page. "
+    "It is remembered in your own browser (localStorage) so you need not retype it, and "
+    "you can clear it there."
 )
 
 #: Shown instead when the server carries its own key.
 KEY_SERVER_NOTE = (
     "This server has its own Anthropic key and is paying for the model call, so you can "
     "leave this blank. A key you type here is used instead, for this request only, and is "
-    "never written to disk, never logged and never sent back to this page."
+    "never written to disk, never logged and never sent back to this page. It is sent "
+    "only when you submit a procedure, never with a substance list."
 )
 
 #: What the visitor is told when there is no key at all to call the model with.
@@ -106,7 +129,13 @@ KEY_MISSING_DETAIL = (
     "nothing has been charged."
 )
 
-#: Fills the key box back in from this browser, and remembers what was typed.
+#: Fills the key box back in from this browser, remembers what was typed, and
+#: keeps the key out of a request that has no use for it. The page is one form,
+#: so without the last part a visitor who once used the procedure path would
+#: POST their Anthropic key on every keyless substance list they ever drafted —
+#: the `<details>` wrapper hides the input, it does not stop it being submitted.
+#: A disabled control is not submitted, and the value is saved before it is
+#: disabled, so the box is still filled in on the next page.
 #: Kept out of `index`'s format string so its braces need no escaping.
 KEY_SCRIPT = """
 <script>
@@ -129,6 +158,10 @@ KEY_SCRIPT = """
         window.localStorage.removeItem(NAME);
       }
     } catch (e) { /* nothing to do: the key still goes with the request */ }
+    var list = form.querySelector("textarea[name=\\"substances\\"]");
+    if (list && list.value.trim()) {
+      box.disabled = true;       // the list path needs no key; do not send one
+    }
   });
 })();
 </script>
@@ -275,11 +308,34 @@ def page(title: str, body: str) -> str:
              standing=esc(STANDING_NOTE), privacy=esc(PRIVACY_NOTE))
 
 
-def error_page(heading: str, detail: str, back: bool = True) -> HTMLResponse:
-    body = "<h1>{}</h1><div class=\"alarm\"><p>{}</p></div>".format(esc(heading), esc(detail))
+def error_page(heading: str, detail: str, back: bool = True, form: Any = None) -> HTMLResponse:
+    """A refusal, with what the visitor typed still in front of them.
+
+    Retyping a forty-line reagent list after one wrong click is the main
+    friction in this flow, so a refusal re-renders the form with everything
+    that was submitted put back — except the key, which the browser restores
+    from its own `localStorage`, and the uploaded file, which no page is
+    allowed to put back into a file input.
+    """
+    body = "<h1>{}</h1><div class=\"alarm\"><p>{}</p>".format(esc(heading), esc(detail))
+    if form is not None and _upload_name(form):
+        body += ("<p style=\"font-size:.9rem;margin:.5rem 0 0\">The file you chose ({}) could "
+                 "not be kept — choose it again below.</p>").format(esc(_upload_name(form)))
+    body += "</div>"
+    if form is not None:
+        body += index_form(
+            values={k: str(form.get(k) or "") for k in
+                    ("title", "name", "date", "college", "year")},
+            substances_text=str(form.get("substances") or ""),
+            manual_text=str(form.get("manual") or ""))
     if back:
         body += "<p><a href=\"/\">Start again</a></p>"
     return HTMLResponse(page(heading, body), status_code=400)
+
+
+def _upload_name(form: Any) -> str:
+    sent = form.get("upload")
+    return str(getattr(sent, "filename", "") or "") if sent is not None else ""
 
 
 # --------------------------------------------------------------------------
@@ -313,16 +369,14 @@ def header_inputs(values: Dict[str, str]) -> str:
     return "<div class=\"grid\">{}</div>".format("".join(out))
 
 
-@app.get("/", response_class=HTMLResponse)
-def index() -> HTMLResponse:
-    body = """
-<h1>COSHH draft</h1>
-<p class="sub">List the substances you are using. The tool looks each one up in PubChem and
-proposes the ticks, and you check every one of them before there is a document. No account,
-no key, nothing stored.</p>
+def index_form(values: Optional[Dict[str, str]] = None, substances_text: str = "",
+               manual_text: str = "") -> str:
+    """The whole input form, with anything already typed put back into it.
 
-<div class="note"><strong>{standing}</strong></div>
-
+    The key is never a value here. It comes back from the visitor's own browser
+    (see `KEY_SCRIPT`) and this server does not keep it long enough to re-render.
+    """
+    return """
 <form method="post" action="/draft" enctype="multipart/form-data">
   <h2>The form's own header</h2>
   <p class="sub">Copied onto the form exactly as you type them. Nothing here is guessed.</p>
@@ -332,7 +386,7 @@ no key, nothing stored.</p>
   <p class="sub">One per line: what it is, then how much of it. Amounts are transcribed word
   for word and never converted, a CAS number in brackets is used if you give one, and a line
   this cannot split keeps its place on the form with a blank amount and a note saying so.</p>
-  <textarea name="substances" rows="10" placeholder="pyrrolidine 7.11 g&#10;triethylamine, 15 mL&#10;3 M HNO3 20 mL&#10;TEMPO 26.8 g (CAS 2564-83-2)"></textarea>
+  <textarea name="substances" rows="10" placeholder="pyrrolidine 7.11 g&#10;triethylamine, 15 mL&#10;3 M HNO3 20 mL&#10;TEMPO 26.8 g (CAS 2564-83-2)">{substances}</textarea>
 
   <div class="actions">
     <button type="submit">Draft the assessment</button>
@@ -340,7 +394,7 @@ no key, nothing stored.</p>
     the list is read here, by a few lines of Python.</span>
   </div>
 
-  <details style="margin-top:2rem">
+  <details style="margin-top:2rem"{open}>
     <summary>Or paste the whole procedure and have the substances read out of it</summary>
     <p class="why">Reading prose is the one step in this tool that needs a language model:
     a method names things it does not use, defines its own abbreviations, and hides the
@@ -352,7 +406,7 @@ no key, nothing stored.</p>
     <h2>The procedure</h2>
     <p class="sub">Paste the experimental section, or upload a <code>.txt</code> or
     <code>.docx</code>. Quantities are transcribed word for word, never converted.</p>
-    <textarea name="manual" rows="14" placeholder="To a stirred solution of ..."></textarea>
+    <textarea name="manual" rows="14" placeholder="To a stirred solution of ...">{manual}</textarea>
     <p style="margin-top:.7rem"><label for="upload">or upload a file</label>
     <input type="file" id="upload" name="upload" accept=".txt,.docx,.md,text/plain"></p>
 
@@ -363,6 +417,23 @@ no key, nothing stored.</p>
   </details>
 </form>
 {keyscript}
+""".format(header=header_inputs(values or {}),
+           substances=esc(substances_text), manual=esc(manual_text),
+           open=" open" if manual_text.strip() else "",
+           keyfield=key_field(), keyscript=KEY_SCRIPT)
+
+
+@app.get("/", response_class=HTMLResponse)
+def index() -> HTMLResponse:
+    body = """
+<h1>COSHH draft</h1>
+<p class="sub">List the substances you are using. The tool looks each one up in PubChem and
+proposes the ticks, and you check every one of them before there is a document. No account,
+no key, nothing stored.</p>
+
+<div class="note"><strong>{standing}</strong></div>
+
+{form}
 
 <h2>What this does not do</h2>
 <ul class="sub" style="padding-left:1.1rem">
@@ -372,8 +443,7 @@ no key, nothing stored.</p>
       and you fill it in from the supplier's safety data sheet.</li>
   <li>It does not sign. <code>Approved By</code> stays blank.</li>
 </ul>
-""".format(standing=esc(STANDING_NOTE), header=header_inputs({}),
-           keyfield=key_field(), keyscript=KEY_SCRIPT)
+""".format(standing=esc(STANDING_NOTE), form=index_form())
     return HTMLResponse(page("COSHH draft", body))
 
 
@@ -381,10 +451,40 @@ no key, nothing stored.</p>
 # Reading the pasted manual
 # --------------------------------------------------------------------------
 
+async def read_capped(upload: Any, limit: int = MAX_UPLOAD_BYTES) -> bytes:
+    """The upload, in chunks, abandoned the moment it passes `limit`."""
+    chunks: List[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(64 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise UploadRefused(
+                "the upload passed {} MB while it was being read, so the rest of it was "
+                "not read at all. Paste the single experiment you are assessing.".format(
+                    limit // (1024 * 1024)))
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def text_from_upload(filename: str, data: bytes) -> str:
     """Pull plain text out of an uploaded .docx, or decode anything else."""
     if filename.lower().endswith(".docx"):
         import docx  # python-docx, already a dependency of the writer
+
+        # What the zip says it expands to, before anything expands it. A 4 MB
+        # upload is allowed to be a 4 MB zip and is not allowed to be a
+        # gigabyte of XML. python-docx sets `resolve_entities=False`, so entity
+        # expansion is already somebody else's solved problem; this is size.
+        with zipfile.ZipFile(io.BytesIO(data)) as bundle:
+            expanded = sum(entry.file_size for entry in bundle.infolist())
+        if expanded > MAX_EXPANDED_BYTES:
+            raise UploadRefused(
+                "that .docx is {:,} bytes of zip claiming to expand to {:,} bytes. Nothing "
+                "here has been expanded. A COSHH procedure is a page of text.".format(
+                    len(data), expanded))
 
         document = docx.Document(io.BytesIO(data))
         parts: List[str] = [p.text for p in document.paragraphs]
@@ -625,8 +725,24 @@ yet. Correct anything wrong here — every box below is the box that will be tic
         waste_note=esc(assessment.get("waste_note") or ""))
 
 
+def body_too_big(request: Request) -> Optional[HTMLResponse]:
+    """Refuse an absurd POST before `request.form()` buffers a byte of it."""
+    declared = request.headers.get("content-length") or ""
+    if declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+        return error_page(
+            "That request is too big",
+            "The request says it is {:.1f} MB, and the limit is {} MB. Nothing was read: "
+            "this is a paste box for one experiment, not an upload endpoint.".format(
+                int(declared) / 1e6, MAX_BODY_BYTES // (1024 * 1024)),
+            back=True)
+    return None
+
+
 @app.post("/draft", response_class=HTMLResponse)
 async def draft(request: Request) -> HTMLResponse:
+    refused = body_too_big(request)
+    if refused is not None:
+        return refused
     form = await request.form()
 
     # The default path, and the reason there is one: a typed substance list is
@@ -634,14 +750,12 @@ async def draft(request: Request) -> HTMLResponse:
     # not a language model. No key, no cost, the same answer every time.
     listing = str(form.get("substances") or "")
     if listing.strip():
-        sent = form.get("upload")
-        if str(form.get("manual") or "").strip() or (
-                sent is not None and getattr(sent, "filename", "")):
+        if str(form.get("manual") or "").strip() or _upload_name(form):
             return error_page(
                 "Two different inputs",
                 "A substance list and a procedure arrived together. Send one or the other: "
                 "assessing both would mean picking one, and the one that was not picked "
-                "would be a set of substances nobody assessed.")
+                "would be a set of substances nobody assessed.", form=form)
         try:
             assessment = substances.assess(
                 listing,
@@ -649,33 +763,34 @@ async def draft(request: Request) -> HTMLResponse:
                 date=str(form.get("date") or ""), college=str(form.get("college") or ""),
                 year=str(form.get("year") or ""))
         except substances.ListTooLong as exc:
-            return error_page("That list is too long", str(exc))
+            return error_page("That list is too long", str(exc), form=form)
         except substances.NothingToList as exc:
-            return error_page("Nothing to assess", str(exc))
+            return error_page("Nothing to assess", str(exc), form=form)
         except Exception as exc:
             return error_page("Something went wrong reading the list",
-                              "{}: {}".format(type(exc).__name__, exc))
+                              "{}: {}".format(type(exc).__name__, exc), form=form)
         return HTMLResponse(page("Check the draft", draft_body(assessment)))
 
     text = str(form.get("manual") or "")
 
     upload = form.get("upload")
-    if upload is not None and getattr(upload, "filename", ""):
-        data = await upload.read()
-        if len(data) > MAX_UPLOAD_BYTES:
-            return error_page("That file is too big",
-                              "The upload is {:.1f} MB; the limit is {} MB.".format(
-                                  len(data) / 1e6, MAX_UPLOAD_BYTES // (1024 * 1024)))
+    if _upload_name(form):
         try:
+            data = await read_capped(upload)
             uploaded = text_from_upload(upload.filename, data)
+        except UploadRefused as exc:
+            return error_page("That file is too big", str(exc), form=form)
         except Exception as exc:  # a bad .docx is the user's problem, but say so plainly
             return error_page("That file could not be read",
-                              "{}: {}".format(type(exc).__name__, exc))
+                              "{}: {}".format(type(exc).__name__, exc), form=form)
         text = (text + "\n\n" + uploaded).strip() if text.strip() else uploaded
 
     if not text.strip():
-        return error_page("Nothing to read",
-                          "Paste the experimental procedure, or upload a .txt or .docx.")
+        return error_page(
+            "Nothing to assess",
+            "List the substances you are using, one per line — or paste the experimental "
+            "procedure, or upload a .txt or .docx. The procedure is the path that needs "
+            "an Anthropic API key; the substance list needs nothing.", form=form)
 
     # The visitor's own key, for this one call. It is never logged, never put
     # in a URL, never written to disk and never rendered back into a page: the
@@ -683,7 +798,7 @@ async def draft(request: Request) -> HTMLResponse:
     # out of any message on its way to the screen in case the SDK echoes it.
     api_key = str(form.get("api_key") or "").strip()
     if not api_key and not server_has_key():
-        return error_page("This needs an Anthropic API key", KEY_MISSING_DETAIL)
+        return error_page("This needs an Anthropic API key", KEY_MISSING_DETAIL, form=form)
 
     def said(exc: Exception, with_type: bool = False) -> str:
         detail = "{}: {}".format(type(exc).__name__, exc) if with_type else str(exc)
@@ -697,13 +812,17 @@ async def draft(request: Request) -> HTMLResponse:
             year=str(form.get("year") or ""),
             api_key=api_key or None)
     except manual.MissingKey as exc:
-        return error_page("This needs an Anthropic API key", said(exc))
+        return error_page("This needs an Anthropic API key", said(exc), form=form)
+    except manual.KeyRefused as exc:
+        # The likeliest failure on this path is a mistyped key, and what the
+        # page used to show for it was the SDK's exception repr.
+        return error_page("Anthropic would not accept that key", said(exc), form=form)
     except manual.ManualTooLong as exc:
-        return error_page("That procedure is too long", said(exc))
+        return error_page("That procedure is too long", said(exc), form=form)
     except manual.ExtractionFailed as exc:
-        return error_page("The manual could not be read", said(exc))
+        return error_page("The manual could not be read", said(exc), form=form)
     except Exception as exc:
-        return error_page("Something went wrong reading the manual", said(exc, True))
+        return error_page("Something went wrong reading the manual", said(exc, True), form=form)
     finally:
         # Out of this frame as soon as the call is over. Nothing else on this
         # server ever holds it: no cache, no session, no module-level anything.
@@ -751,10 +870,16 @@ def corrected(baseline: Dict[str, Any], form: Any) -> Dict[str, Any]:
             # thing this tool exists to prevent, so it goes back through the
             # no-classification banner and is loud on both the page and the file.
             new["unknown"] = True
-            extra_review.append(
-                "{}: the hazards on this row were deleted by hand and nothing replaced them. "
-                "The Hazards cell will carry the no-classification banner until you fill it "
-                "in.".format(new["name"] or "a row"))
+            if row.get("hazards"):
+                # Only when there was something to delete. On the list path a
+                # row PubChem could not classify arrives empty, and telling the
+                # signer the chemist wiped it is an accusation about a box
+                # nobody touched — printed beside the true note saying the same
+                # substance has no classification.
+                extra_review.append(
+                    "{}: the hazards on this row were deleted by hand and nothing replaced "
+                    "them. The Hazards cell will carry the no-classification banner until "
+                    "you fill it in.".format(new["name"] or "a row"))
         if row.get("unknown") and typed:
             # The banner would contradict what the chemist just wrote, so it goes;
             # the provenance does not.
@@ -789,7 +914,25 @@ def corrected(baseline: Dict[str, Any], form: Any) -> Dict[str, Any]:
     out["waste"] = list(form.getlist("waste"))
     out["waste_note"] = str(form.get("waste_note") or "").strip()
 
-    out["review"] = list(dict.fromkeys(list(baseline.get("review") or []) + extra_review))
+    # The amount lines are recomputed from the corrected rows rather than
+    # carried over, because they go stale in both directions. An amount typed
+    # in leaves the reader's "no amount was read" line in the document arguing
+    # with the filled cell beside it; an amount cleared leaves a blank Amount
+    # cell with nothing anywhere saying so. A review block that contradicts the
+    # form is how a signer learns to stop reading the review block.
+    was_read = [str(r.get("raw") or r.get("source_line") or "")
+                for r in (baseline.get("substances") or [])]
+    kept_review = [line for line in (baseline.get("review") or [])
+                   if not any(substances.is_no_amount_note(line, raw) for raw in was_read)]
+    for row in rows:
+        if row.get("kind") == "equipment":
+            continue                        # a rotary evaporator has no mass
+        if not str(row.get("amount") or "").strip():
+            extra_review.append(
+                "{}: the Amount cell is blank. Write in how much you are using before this "
+                "form is signed.".format(row.get("name") or "a row"))
+
+    out["review"] = list(dict.fromkeys(kept_review + extra_review))
     return out
 
 

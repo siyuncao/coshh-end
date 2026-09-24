@@ -231,6 +231,26 @@ class MissingKey(RuntimeError):
     """No Anthropic key was supplied and none is in the environment."""
 
 
+class KeyRefused(RuntimeError):
+    """Anthropic would not accept the key that was supplied."""
+
+
+#: Where a key comes from, for the one message that has to say so.
+KEY_CONSOLE_URL = "https://console.anthropic.com/settings/keys"
+
+
+def _is_authentication_error(exc: BaseException) -> bool:
+    """True for the SDK's 401. Matched by shape, so the SDK need not be imported.
+
+    A mistyped key is the likeliest failure on the whole procedure path, and
+    the SDK's own exception repr — `AuthenticationError: Error code: 401 -
+    {'type': 'error', ...}` — is not a sentence anybody should have to read.
+    """
+    if getattr(exc, "status_code", None) == 401:
+        return True
+    return type(exc).__name__ == "AuthenticationError"
+
+
 def _client(api_key: Optional[str] = None):
     """The Anthropic client, imported late so offline tests need no SDK key.
 
@@ -331,11 +351,19 @@ def extract(text: str, *, client: Any = None, api_key: Optional[str] = None,
     )
     # Streamed, not because anyone watches it arrive, but because the SDK
     # refuses a non-streaming call whose max_tokens could take over ten minutes.
-    if hasattr(client.messages, "stream"):
-        with client.messages.stream(**request) as stream:
-            message = stream.get_final_message()
-    else:                                   # a test double, or an older SDK
-        message = client.messages.create(**request)
+    try:
+        if hasattr(client.messages, "stream"):
+            with client.messages.stream(**request) as stream:
+                message = stream.get_final_message()
+        else:                               # a test double, or an older SDK
+            message = client.messages.create(**request)
+    except Exception as exc:
+        if not _is_authentication_error(exc):
+            raise
+        raise KeyRefused(
+            "Anthropic would not accept that key. Check it at {} — or use the substance "
+            "list instead, which needs no key and no model. Nothing has been read, and "
+            "nothing has been charged.".format(KEY_CONSOLE_URL)) from exc
 
     # A reply cut off at the token limit is not malformed JSON, and saying so
     # sends the reader looking in the wrong place. Read the reason first.

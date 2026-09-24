@@ -660,6 +660,38 @@ class ExtractTest(unittest.TestCase):
         self.assertEqual(read["scheme"], "Nitration of toluene")
         self.assertEqual(client.calls[0]["max_tokens"], manual.MAX_TOKENS)
 
+    def test_a_rejected_key_becomes_a_sentence_rather_than_an_sdk_repr(self):
+        """A mistyped key is the likeliest failure on the whole procedure path.
+
+        The SDK raises `AuthenticationError: Error code: 401 - {'type': ...}`,
+        which is a Python repr and not something to put in front of a chemist.
+        """
+        class AuthenticationError(Exception):
+            status_code = 401
+
+        class _Refusing(_Client):
+            def create(self, **kwargs):
+                raise AuthenticationError(
+                    "Error code: 401 - {'type': 'error', 'error': "
+                    "{'type': 'authentication_error', 'message': 'API key is invalid.'}}")
+
+        with self.assertRaises(manual.KeyRefused) as cm:
+            manual.extract("Dissolve toluene.", client=_Refusing(GOOD_REPLY))
+        said = str(cm.exception)
+        self.assertIn("would not accept that key", said)
+        self.assertIn(manual.KEY_CONSOLE_URL, said)
+        self.assertIn("substance list", said)
+        self.assertIn("nothing has been charged", said)
+        self.assertNotIn("401", said)
+
+    def test_a_failure_that_is_not_about_the_key_is_left_alone(self):
+        class _Broken(_Client):
+            def create(self, **kwargs):
+                raise TimeoutError("the connection went away")
+
+        with self.assertRaises(TimeoutError):
+            manual.extract("Dissolve toluene.", client=_Broken(GOOD_REPLY))
+
     def test_an_empty_manual_stops_the_run(self):
         with self.assertRaises(manual.ExtractionFailed):
             manual.extract("   ", client=_Client(GOOD_REPLY))

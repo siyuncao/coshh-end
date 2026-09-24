@@ -54,7 +54,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from coshh import manual
 
-__all__ = ["parse_line", "parse_list", "read_list", "assess",
+__all__ = ["parse_line", "parse_list", "read_list", "assess", "notes_for",
+           "no_amount_note", "is_no_amount_note",
            "ListTooLong", "NothingToList", "NO_MODEL"]
 
 
@@ -433,6 +434,26 @@ def parse_list(text: str) -> List[Dict[str, Any]]:
     return out
 
 
+#: What a row with no amount earns in the review. It is a named shape rather
+#: than an inline string because `app.corrected` has to recognise it again: once
+#: the chemist has typed the amount in, this line sits in the document arguing
+#: with the cell beside it, and a review block that contradicts the form is how
+#: a signer learns to stop reading review blocks.
+_NO_AMOUNT_NOTE = ("{name}: no amount was read from the line {raw!r}, so the Amount cell is "
+                   "blank. Write in how much you are using before this form is signed.")
+_NO_AMOUNT_MARK = "no amount was read from the line"
+
+
+def no_amount_note(name: str, raw: str) -> str:
+    """The review line for a row whose Amount cell came out blank."""
+    return _NO_AMOUNT_NOTE.format(name=name, raw=raw)
+
+
+def is_no_amount_note(line: str, raw: str) -> bool:
+    """True when `line` is :func:`no_amount_note` for the typed line `raw`."""
+    return bool(raw) and _NO_AMOUNT_MARK in line and repr(raw) in line
+
+
 def notes_for(entries: List[Dict[str, Any]]) -> List[str]:
     """The review lines a parsed list earns, before PubChem is asked anything."""
     notes: List[str] = []
@@ -445,10 +466,7 @@ def notes_for(entries: List[Dict[str, Any]]) -> List[str]:
         elif entry["parse_note"]:
             notes.append("{}: {}.".format(entry["name"], entry["parse_note"]))
         elif not entry["amount"]:
-            notes.append(
-                "{}: no amount was read from the line {!r}, so the Amount cell is blank. "
-                "Write in how much you are using before this form is signed.".format(
-                    entry["name"], entry["raw"]))
+            notes.append(no_amount_note(entry["name"], entry["raw"]))
     return notes
 
 
