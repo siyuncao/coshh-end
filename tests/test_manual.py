@@ -232,6 +232,94 @@ class LookupNameTest(unittest.TestCase):
         self.assertEqual(read["substances"][0]["lookup_name"], "")
 
 
+class IdentityTest(unittest.TestCase):
+    """One substance is one row, and a name that resolves to nothing says so."""
+
+    def test_the_same_substance_written_two_ways_is_one_row(self):
+        out = manual.assess(
+            "method",
+            extractor=extractor(substances=[
+                substance("anhydrous dichloromethane", "100 mL",
+                          lookup_name="dichloromethane",
+                          source_line="dissolved in anhydrous dichloromethane (100 mL)"),
+                substance("dichloromethane", "3 x 20 mL",
+                          source_line="extracted with dichloromethane (3 x 20 mL)")]),
+            lookup=looker({"dichloromethane": pubchem("dichloromethane", "H351")}))
+        names = [r["name"] for r in out["substances"]]
+        self.assertEqual(["anhydrous dichloromethane"], names)
+        # the amounts are joined, not lost and not added up
+        row = row_for(out, "anhydrous dichloromethane")
+        self.assertIn("100 mL", row["amount"])
+        self.assertIn("3 x 20 mL", row["amount"])
+
+    def test_the_other_spelling_is_still_traceable_to_its_sentence(self):
+        out = manual.assess(
+            "method",
+            extractor=extractor(substances=[
+                substance("Et2O", "50 mL", lookup_name="diethyl ether",
+                          source_line="washed with Et2O (50 mL)"),
+                substance("Diethyl ether", "20 mL", lookup_name="diethyl ether",
+                          source_line="and a further 20 mL of diethyl ether")]),
+            lookup=looker({"diethyl ether": pubchem("diethyl ether", "H224")}))
+        row = row_for(out, "Et2O")
+        self.assertIn("Diethyl ether", row["source_line"])
+        self.assertIn("washed with Et2O", row["source_line"])
+
+    def test_a_search_term_that_resolves_to_nothing_is_retried_under_the_own_name(self):
+        asked = []
+
+        def watching(name, cas=""):
+            asked.append(name)
+            if name == "sodium chloride":
+                return pubchem("sodium chloride", "H318")
+            return pubchem(name, found=False, cas=cas)
+
+        out = manual.assess(
+            "method",
+            extractor=extractor(substances=[
+                substance("sodium chloride", "20 mL",
+                          lookup_name="sodium chloride solution")]),
+            lookup=watching)
+        self.assertEqual(["sodium chloride solution", "sodium chloride"], asked)
+        self.assertTrue(row_for(out, "sodium chloride")["classified"])
+
+    def test_a_name_nothing_matched_gets_its_own_banner_not_the_other_one(self):
+        out = manual.assess(
+            "method",
+            extractor=extractor(substances=[substance("compound 7b", "0.3 g")]),
+            lookup=lambda name, cas="": pubchem(name, found=False, cas=cas))
+        row = row_for(out, "compound 7b")
+        self.assertIn("NAME NOT RESOLVED IN PUBCHEM", row["banner"])
+        self.assertTrue(any("no compound matched" in line for line in out["review"]))
+
+    def test_a_lookup_that_never_answered_says_so_rather_than_claiming_a_negative(self):
+        def down(name, cas=""):
+            answer = pubchem(name, found=False, cas=cas)
+            answer["unreachable"] = True
+            answer["cid"] = None
+            return answer
+
+        out = manual.assess(
+            "method", extractor=extractor(substances=[substance("toluene", "5 mL")]),
+            lookup=down)
+        self.assertTrue(any("lookup failed" in line for line in out["review"]))
+        self.assertTrue(row_for(out, "toluene")["unknown"])
+
+    def test_a_resolved_compound_is_named_so_a_substitution_is_visible(self):
+        def resolving(name, cas=""):
+            answer = pubchem(name, "H302", cas=cas)
+            answer["cid"] = 174
+            answer["resolved_title"] = "Ethylene Glycol"
+            return answer
+
+        out = manual.assess(
+            "method", extractor=extractor(substances=[substance("PEG", "2 g")]),
+            lookup=resolving)
+        self.assertTrue(any("CID 174" in line and "Ethylene Glycol" in line
+                            for line in out["review"]))
+        self.assertIn("PubChem CID 174", row_for(out, "PEG")["provenance"])
+
+
 class RulesAreAppliedTest(unittest.TestCase):
 
     def assess_dcm_and_sodium_borohydride(self):
@@ -377,8 +465,14 @@ class EquipmentTest(unittest.TestCase):
         self.assertFalse(any("oil bath" in why for why in self.out["waste_why"].values()))
 
     def test_equipment_keeps_the_standing_controls(self):
-        for option in (SPILL, SPECTACLES, LAB_COAT):
-            self.assertIn(option, row_for(self.out, "oil bath")["controls"])
+        self.assertEqual([SPILL, SPECTACLES, LAB_COAT],
+                         row_for(self.out, "oil bath")["controls"])
+
+    def test_equipment_does_not_inherit_the_methods_controls(self):
+        """'Heat using temperature-controlled water bath' is not a property of kit."""
+        controls = row_for(self.out, "oil bath")["controls"]
+        self.assertNotIn(rules.WATER_BATH, controls)
+        self.assertNotIn(ADD_DROPWISE, controls)
 
 
 # --------------------------------------------------------------------------
@@ -440,21 +534,23 @@ class _Block:
 
 
 class _Message:
-    def __init__(self, text):
+    def __init__(self, text, stop_reason="end_turn"):
         self.content = [_Block(text)]
+        self.stop_reason = stop_reason
 
 
 class _Client:
     """Records the request and returns a canned reply."""
 
-    def __init__(self, reply):
+    def __init__(self, reply, stop_reason="end_turn"):
         self.reply = reply
+        self.stop_reason = stop_reason
         self.calls = []
         self.messages = self
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return _Message(self.reply)
+        return _Message(self.reply, self.stop_reason)
 
 
 GOOD_REPLY = json.dumps({
@@ -504,6 +600,51 @@ class ExtractTest(unittest.TestCase):
     def test_a_reply_that_is_not_json_stops_the_run(self):
         with self.assertRaises(manual.ExtractionFailed):
             manual.extract("text", client=_Client("I'm afraid I can't do that."))
+
+    def test_a_reply_cut_off_at_the_token_limit_says_so(self):
+        """Truncated JSON is not malformed JSON, and the remedy is different."""
+        client = _Client(GOOD_REPLY[:60], stop_reason="max_tokens")
+        with self.assertRaises(manual.ExtractionFailed) as caught:
+            manual.extract("text", client=client)
+        message = str(caught.exception)
+        self.assertIn("ran out of room", message)
+        self.assertNotIn("was not JSON", message)
+
+    def test_a_streaming_client_is_used_when_the_sdk_offers_one(self):
+        """max_tokens this high makes the SDK refuse a non-streaming call."""
+        class _Stream:
+            def __init__(self, outer, kwargs):
+                self.outer, self.kwargs = outer, kwargs
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def get_final_message(self):
+                self.outer.calls.append(self.kwargs)
+                return _Message(GOOD_REPLY)
+
+        class _Messages:
+            def __init__(self, outer):
+                self.outer = outer
+
+            def stream(self, **kwargs):
+                return _Stream(self.outer, kwargs)
+
+            def create(self, **kwargs):
+                raise AssertionError("create() must not be used when stream() exists")
+
+        class _Streaming:
+            def __init__(self):
+                self.calls = []
+                self.messages = _Messages(self)
+
+        client = _Streaming()
+        read = manual.extract("text", client=client)
+        self.assertEqual(read["scheme"], "Nitration of toluene")
+        self.assertEqual(client.calls[0]["max_tokens"], manual.MAX_TOKENS)
 
     def test_an_empty_manual_stops_the_run(self):
         with self.assertRaises(manual.ExtractionFailed):
