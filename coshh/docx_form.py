@@ -853,16 +853,27 @@ def render(assessment: Dict, out_path, template_path=None,
              "hazards": [{"code": "H225", "text": "..."}],
              "exposure": ["Eyes", "Skin"],
              "controls": ["Gloves", "Fumehood"],
-             "unknown": bool, "note": str | None}
+             "unknown": bool, "note": str | None,
+             "banner": str | None,       # replaces UNASSESSED_TEXT for this row
+             "provenance": str | None,   # source, CID and resolved title
+             "review": [str]}            # what to check about THIS row
           ],
           "implications": {"Gas Release": {"yes": True, "prevention": "..."}},
           "waste": ["Aqueous"],
           "waste_note": str | None,
+          "review": [str],               # what to check about the whole form
+          "mentioned_not_used": [{"name": str, "source_line": str}],
         }
 
-    Nothing here decides chemistry: every tick comes from the dict. The returned
-    :class:`RenderReport` lists what a human still has to settle — which always
-    includes ``Approved By``, because this tool never signs.
+    Nothing here decides chemistry: every tick comes from the dict. What the
+    document gains that the dict does not state is the draft notice: a dated
+    line in ``Special measures:`` naming the tool and the data source, because
+    nothing else in the file would say a machine wrote it.
+
+    ``review`` and ``mentioned_not_used`` are written into the form, not just
+    returned. The :class:`RenderReport` still lists what a human has to settle,
+    for a caller that wants it — which always includes ``Approved By``, because
+    this tool never signs.
     """
     substances = list(assessment.get("substances") or [])
     skipped = [s for s in (assessment.get("mentioned_not_used") or []) if s]
