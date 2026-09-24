@@ -153,18 +153,19 @@ class NothingSilentlyDroppedTest(unittest.TestCase):
         self.assertTrue(any("ethyl 4-oxo-hexanoate" in line for line in out["review"]))
         self.assertTrue(out["needs_review"])
 
-    def test_unclassified_row_still_carries_the_standing_controls(self):
+    def test_unclassified_row_ticks_more_than_a_blank_row_does(self):
         out = manual.assess(
             "method", extractor=extractor(substances=[substance("mystery solid")]),
             lookup=looker({}))
         controls = row_for(out, "mystery solid")["controls"]
-        self.assertEqual(controls, [SPILL, SPECTACLES, LAB_COAT])
+        self.assertEqual(controls, [SPILL, SPECTACLES, LAB_COAT, GLOVES, FUMEHOOD])
 
-    def test_unclassified_row_ticks_no_route_it_cannot_justify(self):
+    def test_unclassified_row_assumes_every_route(self):
         out = manual.assess(
             "method", extractor=extractor(substances=[substance("mystery solid")]),
             lookup=looker({}))
-        self.assertEqual(row_for(out, "mystery solid")["exposure"], [])
+        self.assertEqual(row_for(out, "mystery solid")["exposure"],
+                         list(rules.EXPOSURE_ROUTES))
 
     def test_mentioned_but_unused_is_listed_and_explained_not_deleted(self):
         out = manual.assess(
@@ -315,12 +316,26 @@ class RulesAreAppliedTest(unittest.TestCase):
         self.assertEqual(out["implications"][SPECIAL]["prevention"], "")
 
     def test_the_procedure_text_reaches_the_rules(self):
-        """'add dropwise' in the method must tick the dropwise box."""
+        """'add dropwise' in a substance's own sentence must tick its dropwise box."""
         out = manual.assess(
             "Add the acid dropwise to the stirred solution over 10 minutes.",
-            extractor=extractor(substances=[substance("acetic acid", "5 mL")]),
+            extractor=extractor(substances=[substance(
+                "acetic acid", "5 mL",
+                source_line="Add the acid dropwise to the stirred solution over 10 minutes.")]),
             lookup=looker({"acetic acid": pubchem("acetic acid", "H226", "H314")}))
         self.assertIn(ADD_DROPWISE, row_for(out, "acetic acid")["controls"])
+
+    def test_a_method_level_control_does_not_land_on_an_unrelated_row(self):
+        """'Add dropwise' next to the drying oven is how a form stops being read."""
+        out = manual.assess(
+            "Add the acid dropwise over 10 minutes. The solid was dried in the oven.",
+            extractor=extractor(substances=[
+                substance("acetic acid", "5 mL", source_line="Add the acid dropwise over 10 minutes."),
+                substance("sodium sulfate", "2 g", source_line="The solid was dried in the oven.")]),
+            lookup=looker({"acetic acid": pubchem("acetic acid", "H226"),
+                           "sodium sulfate": pubchem("sodium sulfate", "H319")}))
+        self.assertIn(ADD_DROPWISE, row_for(out, "acetic acid")["controls"])
+        self.assertNotIn(ADD_DROPWISE, row_for(out, "sodium sulfate")["controls"])
 
     def test_approval_is_never_filled_and_is_always_flagged(self):
         out = manual.assess(

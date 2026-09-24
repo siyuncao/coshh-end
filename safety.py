@@ -36,13 +36,29 @@ CACHE_MAX = 500
 _cache: dict = {}
 
 
+class PubChemUnreachable(RuntimeError):
+    """PubChem could not be asked, so nothing was checked.
+
+    Deliberately not the same thing as PubChem answering "I hold nothing for
+    that". A negative answer is a fact about the compound; a network failure is
+    a fact about the afternoon, and writing "no classification" on a COSHH form
+    because a router blinked is a false statement on a document somebody signs.
+    """
+
+
 def _get(path: str, **params) -> Optional[dict]:
-    """A GET that answers None rather than raising: no hazard data is not an error."""
+    """A GET that answers None for "PubChem holds nothing" and raises for "PubChem did not answer".
+
+    A 4xx is PubChem telling us it has no such record — that is data. A
+    transport failure or a 5xx is PubChem not telling us anything, which is not.
+    """
     try:
         r = httpx.get(BASE + path, params=params, timeout=TIMEOUT,
                       headers={"User-Agent": "paper-to-order (chemical procurement)"})
-    except Exception:
-        return None
+    except Exception as exc:
+        raise PubChemUnreachable("{}: {}".format(type(exc).__name__, exc)) from exc
+    if r.status_code >= 500:
+        raise PubChemUnreachable("PubChem answered {}".format(r.status_code))
     if r.status_code != 200:
         return None
     try:
@@ -64,6 +80,20 @@ def find_cid(name: str, cas: str = "") -> Optional[int]:
         if cids:
             return int(cids[0])
     return None
+
+
+def title(cid: int) -> str:
+    """
+    PubChem's own name for a compound id, so a substituted compound is visible.
+
+    The resolver is generous: `hazards("PEG")` comes back as CID 174, which is
+    Ethylene Glycol. The codes are then perfectly real and belong to a different
+    molecule. Printing the title PubChem answered with next to the codes is what
+    lets the person signing the form notice.
+    """
+    data = _get(f"/pug/compound/cid/{cid}/property/Title/JSON")
+    props = ((data or {}).get("PropertyTable") or {}).get("Properties") or []
+    return str((props[0] if props else {}).get("Title") or "")
 
 
 def _strings(info: dict) -> list:
@@ -192,7 +222,9 @@ def hazards(name: str, cas: str = "") -> dict:
     What a COSHH assessment needs about one chemical, with its source.
 
     Always answers. `found` is False when PubChem does not know the compound
-    or holds no classification for it, and `primary` is the block to quote:
+    or holds no classification for it; `unreachable` is True when PubChem was
+    never asked successfully, which is a different claim and is never cached.
+    `primary` is the block to quote:
     the harmonised EU classification when there is one, which is what GB CLP
     follows, and otherwise the first source PubChem lists.
     """
@@ -201,11 +233,23 @@ def hazards(name: str, cas: str = "") -> dict:
     if hit and time.monotonic() - hit[0] < CACHE_TTL:
         return hit[1]
 
-    cid = find_cid(name, cas)
-    data = classify(cid) if cid else None
+    try:
+        cid = find_cid(name, cas)
+        resolved = title(cid) if cid else ""
+        data = classify(cid) if cid else None
+    except PubChemUnreachable as exc:
+        # Not cached. The next caller, or the next request, tries again: a
+        # transient failure must not freeze "unclassified" for the life of the
+        # process, which under uvicorn is the whole afternoon.
+        return {"found": False, "unreachable": True, "cid": None, "name": name,
+                "cas": cas, "url": None, "resolved_title": "", "primary": None,
+                "other_sources": [],
+                "note": "PubChem could not be reached, so this substance was never "
+                        "checked — look it up by hand. ({})".format(exc)}
+
     if not data:
-        answer = {"found": False, "cid": cid, "name": name, "cas": cas,
-                  "url": PAGE.format(cid=cid) if cid else None,
+        answer = {"found": False, "unreachable": False, "cid": cid, "name": name, "cas": cas,
+                  "url": PAGE.format(cid=cid) if cid else None, "resolved_title": resolved,
                   "primary": None, "other_sources": [],
                   "note": "PubChem holds no GHS classification for this one. "
                           "Use the supplier's safety data sheet."}
@@ -214,8 +258,8 @@ def hazards(name: str, cas: str = "") -> dict:
         harmonised = next(
             (b for b in blocks if "1272/2008" in (b["source"] or "")), blocks[0])
         answer = {
-            "found": True, "cid": data["cid"], "name": name, "cas": cas,
-            "url": data["url"], "primary": harmonised,
+            "found": True, "unreachable": False, "cid": data["cid"], "name": name, "cas": cas,
+            "url": data["url"], "resolved_title": resolved, "primary": harmonised,
             "other_sources": [b for b in blocks if b is not harmonised],
             "note": None,
         }

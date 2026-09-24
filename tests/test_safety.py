@@ -106,17 +106,70 @@ class ParsingTest(unittest.TestCase):
 
         def counted(path, **params):
             calls.append(path)
-            return RECORD if "pug_view" in path else {"IdentifierList": {"CID": [516875]}}
+            if "pug_view" in path:
+                return RECORD
+            if "property/Title" in path:
+                return {"PropertyTable": {"Properties": [
+                    {"CID": 516875, "Title": "Potassium Permanganate"}]}}
+            return {"IdentifierList": {"CID": [516875]}}
 
         with mock.patch.object(safety, "_get", counted):
             safety.hazards("potassium permanganate", "7722-64-7")
             safety.hazards("Potassium Permanganate ", "7722-64-7")
-        self.assertEqual(len(calls), 2)  # one id lookup, one classification
+        # one id lookup, one title, one classification — then the cache answers
+        self.assertEqual(len(calls), 3)
 
-    def test_a_pubchem_outage_is_not_an_error(self):
+    def test_the_title_pubchem_resolved_to_is_carried_back(self):
+        """PubChem maps a near-miss onto a different compound; the title shows it."""
+        def answering(path, **params):
+            if "property/Title" in path:
+                return {"PropertyTable": {"Properties": [{"CID": 174, "Title": "Ethylene Glycol"}]}}
+            return {"IdentifierList": {"CID": [174]}}
+
+        with mock.patch.object(safety, "_get", answering):
+            answer = safety.hazards("PEG")
+        self.assertEqual(answer["resolved_title"], "Ethylene Glycol")
+
+    def test_a_pubchem_outage_is_not_reported_as_an_absence_of_data(self):
+        """'Nobody classified it' and 'nobody answered' are different sentences."""
         with mock.patch.object(safety.httpx, "get", mock.Mock(side_effect=OSError("down"))):
             answer = safety.hazards("pyrrolidine", "123-75-1")
         self.assertFalse(answer["found"])
+        self.assertTrue(answer["unreachable"])
+        self.assertIn("could not be reached", answer["note"])
+        self.assertNotIn("holds no GHS", answer["note"])
+
+    def test_an_outage_is_not_cached_so_the_next_lookup_tries_again(self):
+        """A blink mid-draft must not freeze 'unclassified' for the whole session."""
+        with mock.patch.object(safety.httpx, "get", mock.Mock(side_effect=OSError("down"))):
+            first = safety.hazards("toluene")
+        self.assertTrue(first["unreachable"])
+
+        def answering(path, **params):
+            if "pug_view" in path:
+                return RECORD
+            if "property/Title" in path:
+                return {"PropertyTable": {"Properties": [{"CID": 1140, "Title": "Toluene"}]}}
+            return {"IdentifierList": {"CID": [1140]}}
+
+        with mock.patch.object(safety, "_get", answering):
+            second = safety.hazards("toluene")
+        self.assertTrue(second["found"])
+        self.assertFalse(second["unreachable"])
+
+    def test_a_server_error_is_an_outage_but_a_404_is_an_answer(self):
+        class Reply:
+            def __init__(self, code):
+                self.status_code = code
+
+            def json(self):
+                return {}
+
+        with mock.patch.object(safety.httpx, "get", lambda *a, **k: Reply(503)):
+            with self.assertRaises(safety.PubChemUnreachable):
+                safety._get("/whatever")
+        with mock.patch.object(safety.httpx, "get", lambda *a, **k: Reply(404)):
+            self.assertIsNone(safety._get("/whatever"))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 """
-Fill the Oxford *COSHH Form, Chemistry Teaching Laboratory* `.docx`.
+Fill the *COSHH Form* `.docx`.
 
 This module is the **writing layer** and nothing else. It takes an assessment
 that somebody else has already reasoned out (see ``coshh.rules``) and stamps it

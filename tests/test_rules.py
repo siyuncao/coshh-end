@@ -229,13 +229,25 @@ class NoClassificationTest(unittest.TestCase):
         self.assertIn("NO CLASSIFICATION FOUND", sub.hazards_text)
         self.assertTrue(sub.needs_review)
 
-    def test_it_still_gets_the_standing_controls(self):
+    def test_it_gets_barrier_and_containment_on_top_of_the_standing_controls(self):
+        """An unassessed row must not be tick-for-tick identical to a blank one."""
         sub = rules.assess_substance({"found": False, "name": "novel ligand", "primary": None})
-        self.assertEqual(set(sub.controls), {SPILL, SPECTACLES, LAB_COAT})
+        self.assertEqual(set(sub.controls),
+                         {SPILL, SPECTACLES, LAB_COAT, GLOVES, FUMEHOOD})
+        self.assertIn("no GHS classification", sub.controls[GLOVES].why)
 
-    def test_it_ticks_no_exposure_route_it_cannot_justify(self):
+    def test_it_assumes_every_route_rather_than_asserting_none(self):
+        """No route ticked reads as 'considered, and there is no way in'."""
         sub = rules.assess_substance({"found": False, "name": "novel ligand", "primary": None})
-        self.assertEqual(sub.exposure, {})
+        self.assertEqual(list(sub.exposure), list(rules.EXPOSURE_ROUTES))
+
+    def test_a_lookup_that_never_answered_is_not_a_lookup_that_found_nothing(self):
+        sub = rules.assess_substance(
+            {"found": False, "unreachable": True, "name": "toluene", "primary": None})
+        self.assertFalse(sub.classified)
+        self.assertIn("NOT CHECKED", sub.hazards_text)
+        self.assertIn("never checked", " ".join(sub.review))
+        self.assertEqual(list(sub.exposure), list(rules.EXPOSURE_ROUTES))
 
     def test_a_substance_never_looked_up_still_gets_a_row(self):
         form = rules.assess_form([], names=["novel ligand"])

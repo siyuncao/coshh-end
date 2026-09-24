@@ -215,9 +215,11 @@ _CLASSES: Tuple[_Class, ...] = (
         },
         routes=(EYES, SKIN),
         route_why="an explosion injures by blast and by fragments, which reach the eyes and any unprotected skin first",
-        controls=(NO_FLAMES, WATER_BATH),
+        controls=(GLOVES, NO_FLAMES, WATER_BATH),
         control_why="an explosive must be kept away from every ignition source, and any heating must go through a "
-                    "temperature-controlled bath rather than a flame or a hotplate where the temperature can run",
+                    "temperature-controlled bath rather than a flame or a hotplate where the temperature can run; "
+                    "gloves because the material is still weighed and transferred by hand, and this form has no box "
+                    "for the blast screen the review line asks for",
         risks=(FIRE, RUNAWAY),
         risk_why="the statement is itself a statement of explosion hazard",
         prevention="Smallest workable quantity behind a blast screen; no ignition sources; "
@@ -236,9 +238,10 @@ _CLASSES: Tuple[_Class, ...] = (
         },
         routes=(EYES, SKIN),
         route_why="the failure mode is a fire or an explosion at the bench, which reaches eyes and skin",
-        controls=(NO_FLAMES, WATER_BATH),
+        controls=(GLOVES, NO_FLAMES, WATER_BATH),
         control_why="the code names heating as the trigger, so heating is the thing to control: a bath with a set "
-                    "temperature, never an open flame",
+                    "temperature, never an open flame; gloves because the ticked skin route is a route somebody "
+                    "still weighs the solid through",
         risks=(FIRE, RUNAWAY),
         risk_why="'heating may cause' is the definition of a runaway that ends in fire or explosion",
         prevention="Temperature-controlled bath with the set point recorded; no direct flame; do not exceed the "
@@ -254,9 +257,9 @@ _CLASSES: Tuple[_Class, ...] = (
         },
         routes=(EYES, SKIN),
         route_why="an explosive decomposition injures by blast and fragments",
-        controls=(NO_FLAMES, WATER_BATH),
-        control_why="inerting does not help here — the code says so — so the controls left are ignition sources and "
-                    "controlled heating",
+        controls=(GLOVES, NO_FLAMES, WATER_BATH),
+        control_why="inerting does not help here — the code says so — so the controls left are ignition sources, "
+                    "controlled heating and the barrier on the hands that handle it",
         # DIVERGENCE from autocoshh, which ticks "Do not expose to air" for H230/H231. The code says the
         # substance reacts *without* air; excluding air is not the control, and ticking it would mislead.
         risks=(FIRE, RUNAWAY),
@@ -312,8 +315,9 @@ _CLASSES: Tuple[_Class, ...] = (
         codes={"H228": "Flammable solid"},
         routes=(SKIN,),
         route_why="it is handled as a solid, so contact is the route that exists at the bench",
-        controls=(NO_FLAMES,),
-        control_why="the hazard is ignition, so the control is removing ignition sources",
+        controls=(GLOVES, NO_FLAMES),
+        control_why="the hazard is ignition, so the control is removing ignition sources; and a solid that is "
+                    "weighed out by hand is touched, which is the route this row ticks",
         risks=(FIRE,),
         risk_why="a flammable solid burns where it is spilled",
         prevention="No ignition sources; sweep up spills immediately; do not grind or generate dust.",
@@ -343,9 +347,10 @@ _CLASSES: Tuple[_Class, ...] = (
         },
         routes=(SKIN,),
         route_why="the hazard is a burn from material that has heated itself where it sits",
-        controls=(NO_AIR, NO_FLAMES),
+        controls=(GLOVES, NO_AIR, NO_FLAMES),
         control_why="self-heating is oxidation by air, so keeping it sealed is the control, and ignition sources go "
-                    "because the end point is a fire",
+                    "because the end point is a fire; gloves because the ticked skin route is the hand that weighs "
+                    "it out and the wipe that goes in the bin",
         risks=(FIRE, RUNAWAY),
         risk_why="self-heating is a runaway by definition: the reaction supplies its own heat",
         prevention="Keep the container closed and in small quantities; do not pile up used filter cake or wipes; "
@@ -498,8 +503,9 @@ _CLASSES: Tuple[_Class, ...] = (
         codes={"H314": "Causes severe skin burns and eye damage"},
         routes=(EYES, SKIN),
         route_why="the statement names both: skin burns and eye damage",
-        controls=(GLOVES,),
-        control_why="a corrosive burns on contact, so the barrier goes on before the bottle is opened",
+        controls=(GLOVES, FUMEHOOD),
+        control_why="a corrosive burns on contact, so the barrier goes on before the bottle is opened; and it is "
+                    "dispensed and diluted in the hood, because the mist and the splash both reach the face",
         review="Corrosive — know where the nearest eyewash and safety shower are before you start, and add "
                "corrosive to water, never water to corrosive.",
     ),
@@ -905,8 +911,10 @@ def control_measures(codes: Iterable[str], *, procedure: str = "",
 # --------------------------------------------------------------------------
 
 _PROCEDURE_CONTROLS: Tuple[Tuple[str, str, str], ...] = (
-    (ADD_DROPWISE, r"\bdrop-?wise\b|\badd(?:ed|ing)?\s+slowly\b|\bover\s+\d+\s*(?:min|h)",
-     "the method itself says the addition is slow or dropwise, which is a rate control and belongs on the form"),
+    (ADD_DROPWISE, r"\bdrop-?wise\b|\badd(?:ed|ing)?\s+slowly\b|\bover\s+\d+\s*(?:min|h)|"
+                   r"\bportion-?wise\b|\bin\s+(?:small\s+)?portions\b",
+     "the method itself says the addition is slow, dropwise or portionwise, which is a rate control and belongs "
+     "on the form"),
     (WATER_BATH, r"\bwater\s*bath\b|\boil\s*bath\b|\bheat(?:ed|ing)?\s+to\s+\d|\breflux",
      "the method heats the reaction, so the bath is the controlled way to do it"),
     (FUMEHOOD, r"\bfume\s*(?:hood|cupboard)\b|\bunder\s+nitrogen\b|\bunder\s+argon\b|\bSchlenk\b",
@@ -923,7 +931,9 @@ def _procedure_controls(procedure: str) -> List[Tuple[str, str]]:
 
 
 _PROCEDURE_RISKS: Tuple[Tuple[str, str, str, str], ...] = (
-    (RUNAWAY, r"\bexotherm|\bice\s*bath\b|\bcool(?:ed|ing)?\s+to\s+(?:0|-\d)|\b-78\b|\bdry\s*ice\b",
+    (RUNAWAY, r"\bexotherm|\bice\s*bath\b|\bcool(?:ed|ing)?\s+to\s+(?:0|-\d)|\b-78\b|\bdry\s*ice\b|"
+              r"\bat\s+0\s*°?\s*C\b|\bice[- ]water\b|"
+              r"\bmaintain(?:ing|ed)?\s+the\s+temperature\s+below\b|\bportion-?wise\b",
      "the method cools the reaction or calls the step exothermic, which is a statement that the heat has to go "
      "somewhere",
      "Add at a rate the cooling can keep up with; keep a thermometer in the flask and stop the addition if the "
@@ -1028,7 +1038,14 @@ _WASTE_BY_PROCEDURE: Tuple[Tuple[str, str, str], ...] = (
 )
 
 _HALOGENS = ("Cl", "Br", "I", "F")
-_METALS = ("Na", "K", "Li", "Mg", "Ca", "Al", "Fe", "Cu", "Zn", "Ag", "Pd", "Pt",
+# Deliberately NOT the alkali and alkaline-earth metals. Named Waste is the
+# bottle that means chromium, cyanide, azide, mercury, peroxide and HF, and
+# routing the brine wash (NaCl) and the drying agent (MgSO4) there on every
+# routine form is how a technician learns to ignore the tick. Their common
+# salts are already routed to Aqueous by `_WASTE_BY_NAME`; the *elemental*
+# case (sodium metal, LiAlH4) is caught by the H260/H261 codes instead — see
+# `waste_streams`.
+_METALS = ("Al", "Fe", "Cu", "Zn", "Ag", "Pd", "Pt",
            "Ni", "Co", "Mn", "Cr", "Hg", "Pb", "Cd", "Os", "Sn", "Ti", "Ru", "Rh")
 
 
@@ -1086,6 +1103,10 @@ def waste_streams(substances: Sequence["SubstanceAssessment"] = (), *,
             review.append(
                 f"Waste stream for {name} was not recognised — label its container by name and check with a "
                 f"technician which stream it belongs to.")
+        if any(code in ("H260", "H261") for code in substance.codes):
+            reasons[NAMED_WASTE].append(
+                f"{name}: it releases flammable gas on contact with water (H260/H261), so the residue is "
+                f"quenched deliberately and goes to its own labelled container, never into an aqueous bottle")
         for code in substance.codes:
             rule = lookup(code)
             if rule and rule.hazard_class.startswith("Hazardous to the aquatic"):
@@ -1105,6 +1126,44 @@ def waste_streams(substances: Sequence["SubstanceAssessment"] = (), *,
 # --------------------------------------------------------------------------
 # The four specific-risk questions
 # --------------------------------------------------------------------------
+
+#: Pairs of substances that evolve gas when they meet, which neither one's own
+#: hazard codes state and which a teaching manual does not write down either.
+#: The commonest gas event in the lab — washing an acidic organic extract with
+#: saturated bicarbonate in a separating funnel — is exactly this shape.
+_GAS_PAIRS: Tuple[Tuple[str, str, str, str], ...] = (
+    (r"\b(?:bi)?carbonate\b|\bhydrogen\s*carbonate\b",
+     r"\bacid\b|\bacidic\b|\bacidif",
+     "{a} meets {b}: carbon dioxide comes off as soon as the acid reaches the carbonate, and in a separating "
+     "funnel it comes off inside a closed vessel",
+     "CO2 is evolved when the acidic mixture meets the bicarbonate: vent the separating funnel immediately "
+     "after the first inversion and at every shake, and point the stem away from people."),
+    (r"\bborohydride\b|\bhydride\b|\bLiAlH4\b|\blithium\s+aluminium\s+hydride\b",
+     r"\bwater\b|\baqueous\b|\bmethanol\b|\bethanol\b|\bisopropanol\b|\bpropan-2-ol\b|\bbrine\b",
+     "{a} meets {b}: a hydride gives off hydrogen when it is quenched with water or an alcohol",
+     "Hydrogen is evolved when the hydride is quenched: quench dropwise into a stirred, vented flask with no "
+     "flames in the bay, and never quench in a sealed or stoppered vessel."),
+)
+
+
+def _acid_like(substance: "SubstanceAssessment", pattern: str) -> bool:
+    """A substance matching by name, or — for the acid half — by being corrosive."""
+    if re.search(pattern, substance.name or "", re.IGNORECASE):
+        return True
+    return "acid" in pattern and any(code in ("H314", "H290") for code in substance.codes)
+
+
+def _gas_pairs(substances: Sequence["SubstanceAssessment"]) -> List[Tuple[str, str]]:
+    """(reason, prevention) for every pair on the form that evolves gas on meeting."""
+    out: List[Tuple[str, str]] = []
+    for first, second, why, advice in _GAS_PAIRS:
+        left = [s for s in substances if re.search(first, s.name or "", re.IGNORECASE)]
+        right = [s for s in substances
+                 if not any(s is other for other in left) and _acid_like(s, second)]
+        if left and right:
+            out.append((why.format(a=left[0].name, b=right[0].name), advice))
+    return out
+
 
 def specific_risks(substances: Sequence["SubstanceAssessment"] = (), *,
                    procedure: str = "") -> Dict[str, RiskRow]:
@@ -1144,6 +1203,10 @@ def specific_risks(substances: Sequence["SubstanceAssessment"] = (), *,
             prevention[MALODOROUS].append(
                 "Keep every transfer and every quench inside the fume hood with the sash low; rinse glassware "
                 "into a sealed quench (bleach for thiols and sulfides) before it leaves the hood.")
+
+    for why, advice in _gas_pairs(substances):
+        reasons[GAS].append(why)
+        prevention[GAS].append(advice)
 
     for row, pattern, why, advice in _PROCEDURE_RISKS:
         if re.search(pattern, procedure or "", re.IGNORECASE):
@@ -1186,17 +1249,57 @@ _NO_DATA_REVIEW = (
 
 _NO_DATA_HAZARDS_TEXT = "NO CLASSIFICATION FOUND — assess from the supplier SDS before use"
 
+#: What an unclassified row ticks. Commitment 2 of this module's docstring —
+#: conservative when unsure — was applied to an *unrecognised code* through
+#: `_FALLBACK["3"]` but not to an *absent classification*, which is the more
+#: dangerous of the two: a row with no route and no PPE ticked is tick-for-tick
+#: identical to a leftover blank row, so the page positively asserts "no route
+#: of entry, no protection needed" for the one substance nobody has assessed.
+_NO_DATA_WHY = (
+    "no GHS classification was found, so every route of entry is assumed and barrier plus containment are "
+    "ticked until someone reads the SDS"
+)
+
+_UNREACHABLE_HAZARDS_TEXT = (
+    "NOT CHECKED — the hazard database could not be reached, so nothing here has been looked up"
+)
+
+_UNREACHABLE_REVIEW = (
+    "{name} was never checked: the PubChem lookup failed, so this row is empty because nothing answered, not "
+    "because nothing was found. Look it up by hand, or draft the form again when the lookup is working."
+)
+
+_UNREACHABLE_WHY = (
+    "the hazard lookup failed, so nothing is known about this substance and every route of entry is assumed "
+    "until somebody checks it by hand"
+)
+
+#: A water-reactive substance that this very method puts into water. The tick
+#: stays — the code is still true — but a ticked control that the procedure
+#: contradicts, with nothing said about it, is worse than no tick at all.
+_WATER_CONTACT = re.compile(
+    r"\bwater\b|\baqueous\b|\bacid\b|\bbrine\b|\bquench|\bhydrolys", re.IGNORECASE)
+
 
 def assess_substance(hazard: Optional[Dict] = None, *, name: str = "", cas: str = "",
-                     amount: str = "", procedure: str = "") -> SubstanceAssessment:
+                     amount: str = "", procedure: str = "",
+                     source_line: str = "") -> SubstanceAssessment:
     """
     One substance row, from a `safety.hazards()` result.
 
     `hazard` is exactly what `safety.hazards(name, cas)` returns; pass None to
     assess a substance that was never looked up, which is treated the same as a
-    lookup that found nothing. When there is no classification the row is filled
-    with the standing controls only, is marked in `review`, and its hazards cell
-    says so in capitals rather than sitting empty.
+    lookup that found nothing. When there is no classification the row is *not*
+    left clean: it ticks every route and the barrier and containment controls,
+    says so in capitals in the Hazards cell, and earns a line in `review`, so
+    that the ticks and the banner say the same thing.
+
+    `source_line` is this substance's own sentence from the manual, and it — not
+    the whole procedure — is what the method-derived controls (dropwise, water
+    bath, hood, air exclusion) are matched against. Matching the whole manual
+    once and stamping the result on every row is how "Add dropwise to solution"
+    ends up ticked next to the drying oven. `procedure` is still read, but only
+    to notice a method that contradicts a control this substance's codes tick.
     """
     hazard = hazard or {}
     name = name or hazard.get("name") or ""
@@ -1204,16 +1307,28 @@ def assess_substance(hazard: Optional[Dict] = None, *, name: str = "", cas: str 
     primary = hazard.get("primary") or {}
     published = tuple(h.get("code", "") for h in primary.get("hazards", []) if h.get("code"))
     codes = expand_codes(published)
+    own_text = source_line or ""
 
     if not hazard.get("found") or not codes:
+        unreachable = bool(hazard.get("unreachable"))
+        why = _UNREACHABLE_WHY if unreachable else _NO_DATA_WHY
+        # Conservative when unsure: the fallback the table already uses for an
+        # unrecognised H3xx code, plus Eyes, because nothing rules it out either.
+        fallback_routes, fallback_controls, _risks, _fw = _FALLBACK["3"]
+        routes = set(fallback_routes) | {EYES}
+        controls = control_measures((), procedure=own_text)
+        for option in fallback_controls:
+            controls[option] = Tick(option=option, why=why)
         return SubstanceAssessment(
             name=name, cas=cas, amount=amount, classified=False,
-            hazards_text=_NO_DATA_HAZARDS_TEXT,
+            hazards_text=_UNREACHABLE_HAZARDS_TEXT if unreachable else _NO_DATA_HAZARDS_TEXT,
             codes=(), unknown_codes=(),
-            exposure={},
-            controls=control_measures((), procedure=procedure),
+            exposure={route: Tick(option=route, why=why)
+                      for route in EXPOSURE_ROUTES if route in routes},
+            controls=controls,
             risks=(),
-            review=(_NO_DATA_REVIEW.format(name=name or "this substance"),),
+            review=((_UNREACHABLE_REVIEW if unreachable else _NO_DATA_REVIEW).format(
+                name=name or "this substance"),),
             source=primary.get("source", ""), url=hazard.get("url") or "",
         )
 
@@ -1239,20 +1354,37 @@ def assess_substance(hazard: Optional[Dict] = None, *, name: str = "", cas: str 
         for code in codes
         for row in (lookup(code).risks if lookup(code) else ()))
 
+    controls = control_measures(codes, procedure=own_text)
+    if NOT_NEAR_WATER in controls and _WATER_CONTACT.search(own_text or procedure or ""):
+        water_codes = ", ".join(c for c in codes if c in ("H250", "H260", "H261"))
+        review.append(
+            f"{name or 'this substance'} is water-reactive ({water_codes or 'see its codes'}) and 'Do not store "
+            f"or use near water' is ticked, but this method brings it into contact with water or an aqueous "
+            f"solution — flammable gas will be evolved. Confirm the vessel is vented and not sealed, that there "
+            f"is no ignition source in the bay, and that this contact is what the method intends.")
+
     return SubstanceAssessment(
         name=name, cas=cas, amount=amount, classified=True,
         hazards_text=hazards_text, codes=codes, unknown_codes=unknown,
         exposure=exposure_routes(codes),
-        controls=control_measures(codes, procedure=procedure),
+        controls=controls,
         risks=risk_rows,
         review=tuple(dict.fromkeys(review)),
         source=primary.get("source", ""), url=hazard.get("url") or "",
     )
 
 
+#: A dilution, a neutralisation or a quench is where the rate matters, but only
+#: when something on the form is corrosive, acidic, oxidising or water-reactive.
+#: The tick then goes on those rows, not on every row of the table.
+_RATE_CONTROLLED_CODES = ("H314", "H290", "H272", "H260", "H261")
+_RATE_CONTROLLED_STEPS = r"\bdilut|\bneutralis|\bneutraliz|\bquench"
+
+
 def assess_form(hazards: Sequence[Dict] = (), *, names: Sequence[str] = (),
                 amounts: Optional[Dict[str, str]] = None,
                 formulae: Optional[Dict[str, str]] = None,
+                source_lines: Optional[Dict[str, str]] = None,
                 procedure: str = "") -> FormAssessment:
     """
     A whole form: one row per substance, plus the risk questions and the waste.
@@ -1260,19 +1392,47 @@ def assess_form(hazards: Sequence[Dict] = (), *, names: Sequence[str] = (),
     `hazards` is a list of `safety.hazards()` results. `names` is only needed for
     substances that were never looked up, so that a substance mentioned in the
     method still gets a row saying it was not assessed rather than vanishing.
+    `source_lines` maps a substance's name to its own sentence in the manual, so
+    that a method-derived control lands on the rows the sentence is about.
     """
     amounts = amounts or {}
+    source_lines = source_lines or {}
     rows: List[SubstanceAssessment] = [
-        assess_substance(h, amount=amounts.get(h.get("name", ""), ""), procedure=procedure)
+        assess_substance(h, amount=amounts.get(h.get("name", ""), ""), procedure=procedure,
+                         source_line=source_lines.get(h.get("name", ""), ""))
         for h in hazards]
     assessed = {row.name.strip().lower() for row in rows}
     for name in names:
         if name.strip().lower() not in assessed:
             rows.append(assess_substance(None, name=name, amount=amounts.get(name, ""),
-                                         procedure=procedure))
+                                         procedure=procedure,
+                                         source_line=source_lines.get(name, "")))
+
+    # A rate control the method argues for, put on the rows it is about.
+    if re.search(_RATE_CONTROLLED_STEPS, procedure or "", re.IGNORECASE):
+        for row in rows:
+            hit = [c for c in row.codes if c in _RATE_CONTROLLED_CODES]
+            if hit and ADD_DROPWISE not in row.controls:
+                row.controls[ADD_DROPWISE] = Tick(
+                    option=ADD_DROPWISE, codes=tuple(hit),
+                    why="the method dilutes, neutralises or quenches, and this substance is corrosive, "
+                        "acidic, oxidising or water-reactive, so the rate of addition is the control")
 
     waste, waste_review = waste_streams(rows, procedure=procedure, formulae=formulae)
     review = list(waste_review)
+
+    # Controls the *method* argues for that no row's own sentence claimed. They
+    # are real, but they belong to the procedure rather than to a substance, so
+    # they are said once here instead of stamped on every row of the table.
+    claimed = {option for row in rows for option in row.controls}
+    loose = [(option, why) for option, why in _procedure_controls(procedure)
+             if option not in claimed]
+    if loose:
+        review.append(
+            "The method as a whole argues for " +
+            ", ".join(f"'{option}'" for option, _why in loose) +
+            ", but no single substance's own sentence did, so no row is ticked for it. Tick the rows it "
+            "applies to, or write it into Special measures.")
     for row in rows:
         review.extend(f"{row.name}: {line}" for line in row.review)
     review.append(
