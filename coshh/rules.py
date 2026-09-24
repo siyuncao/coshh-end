@@ -1043,6 +1043,32 @@ _WASTE_BY_PROCEDURE: Tuple[Tuple[str, str, str], ...] = (
      "not general rubbish"),
 )
 
+#: A third opinion, for a name the closed list has never heard of and a
+#: formula nobody supplied. "Benzyl bromide" is the case the halogenated bottle
+#: exists for, and a form that declines to say so from the name alone is
+#: declining the one call it could make. It is a proposal, not a
+#: classification: the review line beside it still asks a technician.
+_HALOGEN_MORPHEMES: Tuple[Tuple[str, str], ...] = (
+    (r"(?:chloro|bromo|iodo|fluoro)", "the name contains a halogen"),
+    (r"\b\w*yl\s+(?:chloride|bromide|iodide|fluoride)\b",
+     "the name is an organic halide"),
+)
+
+#: Green, not chlorinated: the Greek for pale green is where both get their
+#: "chloro" from, and neither carries a carbon-halogen bond.
+_NOT_ACTUALLY_HALOGENATED = re.compile(r"\bchloroph|\bchlorell", re.IGNORECASE)
+
+
+def _halogen_in_name(name: str) -> Optional[str]:
+    """Why this name reads as halogenated, or None."""
+    if not name or _NOT_ACTUALLY_HALOGENATED.search(name):
+        return None
+    for pattern, why in _HALOGEN_MORPHEMES:
+        if re.search(pattern, name, re.IGNORECASE):
+            return why
+    return None
+
+
 _HALOGENS = ("Cl", "Br", "I", "F")
 # Deliberately NOT the alkali and alkaline-earth metals. Named Waste is the
 # bottle that means chromium, cyanide, azide, mercury, peroxide and HF, and
@@ -1108,12 +1134,21 @@ def waste_streams(substances: Sequence["SubstanceAssessment"] = (), *,
                 f"quenched deliberately and goes to its own labelled container, never into an aqueous bottle")
             matched = True
         if not matched:
-            reasons[NAMED_WASTE].append(
-                f"{name}: not recognised as a standard solvent or reagent, so it goes to named waste until "
-                f"somebody says otherwise")
-            review.append(
-                f"Waste stream for {name} was not recognised — label its container by name and check with a "
-                f"technician which stream it belongs to.")
+            by_name = _halogen_in_name(name)
+            if by_name:
+                reasons[HALOGENATED].append(
+                    f"{name}: {by_name}, so it goes in the halogenated bottle — read off the name and not "
+                    f"off a classification, so confirm it before you pour")
+                review.append(
+                    f"Waste stream for {name} was proposed from its name alone ({by_name}) — label its "
+                    f"container by name and check with a technician which stream it belongs to.")
+            else:
+                reasons[NAMED_WASTE].append(
+                    f"{name}: not recognised as a standard solvent or reagent, so it goes to named waste until "
+                    f"somebody says otherwise")
+                review.append(
+                    f"Waste stream for {name} was not recognised — label its container by name and check with a "
+                    f"technician which stream it belongs to.")
         for code in substance.codes:
             rule = lookup(code)
             if rule and rule.hazard_class.startswith("Hazardous to the aquatic"):

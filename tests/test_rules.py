@@ -340,6 +340,39 @@ class WasteTest(unittest.TestCase):
         self.assertIn(NAMED_WASTE, ticks)
         self.assertTrue(any("Compound 4b" in line for line in review))
 
+    def test_an_obviously_halogenated_name_proposes_the_halogenated_bottle(self):
+        """Benzyl bromide is the case that bottle exists for.
+
+        The closed list has never heard of it and no formula was supplied, so
+        it used to go to Named Waste with the Halogenated box unticked — the
+        one call the form could have made from the name alone, declined.
+        """
+        for name, why in (("benzyl bromide", "organic halide"),
+                          ("1-bromobutane", "contains a halogen"),
+                          ("thionyl chloride", "organic halide")):
+            with self.subTest(name=name):
+                subs = [rules.assess_substance(None, name=name)]
+                ticks, review = rules.waste_streams(subs)
+                self.assertIn(HALOGENATED, ticks)
+                self.assertIn(why, ticks[HALOGENATED].why)
+                # Still a proposal read off a name, so a technician is still asked.
+                self.assertTrue(any(name in line and "technician" in line
+                                    for line in review), review)
+
+    def test_a_name_on_the_list_needs_no_proposal_and_earns_no_review_line(self):
+        subs = [rules.assess_substance(None, name="dichloromethane")]
+        ticks, review = rules.waste_streams(subs)
+        self.assertIn(HALOGENATED, ticks)
+        self.assertIn("carbon-halogen bond", ticks[HALOGENATED].why)
+        self.assertEqual((), review)
+
+    def test_green_is_not_chlorinated(self):
+        """Chlorophyll is named for the colour and carries no halogen."""
+        subs = [rules.assess_substance(None, name="chlorophyll a")]
+        ticks, _ = rules.waste_streams(subs)
+        self.assertNotIn(HALOGENATED, ticks)
+        self.assertIn(NAMED_WASTE, ticks)
+
     def test_aquatic_toxicity_keeps_it_out_of_the_sink(self):
         sub = rules.assess_substance(_pubchem("copper sulfate", "H410"))
         ticks, _ = rules.waste_streams([sub])
