@@ -224,3 +224,40 @@ def hazards(name: str, cas: str = "") -> dict:
         _cache.clear()
     _cache[key] = (time.monotonic(), answer)
     return answer
+
+
+def as_text(answer: dict) -> str:
+    """
+    One chemical's label, as a block you can read in a terminal or paste into
+    a draft. Source first, because a code without one is not quotable.
+    """
+    head = f"{answer['name']}" + (f" (CAS {answer['cas']})" if answer.get("cas") else "")
+    if not answer["found"]:
+        return f"{head}\n  {answer['note']}"
+
+    p = answer["primary"]
+    lines = [head, f"  source      {p['source'] or 'unnamed'}"]
+    if p["signal_word"]:
+        lines.append(f"  signal      {p['signal_word']}")
+    if p["pictograms"]:
+        lines.append("  pictograms  " + ", ".join(
+            f"{g['code']} {g['meaning']}".strip() for g in p["pictograms"]))
+    for h in p["hazards"]:
+        lines.append(f"  {h['code']:<11} {h['text']}")
+    if p["precautions"]:
+        lines.append("  precautions " + ", ".join(p["precautions"]))
+    if answer["other_sources"]:
+        lines.append(f"  note        {len(answer['other_sources'])} other classification(s) "
+                     "on PubChem, which may differ")
+    lines.append(f"  pubchem     {answer['url']}")
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) < 2:
+        print("usage: python safety.py NAME [CAS]\n"
+              "   eg: python safety.py pyrrolidine 123-75-1")
+        raise SystemExit(2)
+    print(as_text(hazards(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "")))
