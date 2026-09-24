@@ -666,5 +666,81 @@ class ShippedTemplateTest(unittest.TestCase):
         self.assertIn("unknown control measure", str(cm.exception))
 
 
+# --------------------------------------------------------------------------
+# Who the file says made it
+#
+# A .docx names people in parts nobody reads: `docProps/core.xml` carries
+# `dc:creator` and `cp:lastModifiedBy`, `docProps/app.xml` carries `Company`.
+# They are inside the zip, so `grep` over the repository misses them, and a
+# template that reads as neutral on the page can still ship two names and an
+# institution — into a public repository, and into every document written from
+# it. The next refresh out of Word will put them back, which is why this is a
+# test and not a one-off fix.
+# --------------------------------------------------------------------------
+
+class NobodyIsNamedInTheMetadataTest(unittest.TestCase):
+
+    IDENTIFYING = ("creator", "lastModifiedBy", "Company")
+
+    def assert_anonymous(self, path):
+        found = docx_form.identity_of(path)
+        for field in self.IDENTIFYING:
+            with self.subTest(field=field):
+                self.assertEqual("", found[field],
+                                 "{} names somebody: {!r}".format(path, found[field]))
+
+    @unittest.skipUnless(HAS_TEMPLATE, SKIP_WHY)
+    def test_the_shipped_template_names_nobody(self):
+        self.assert_anonymous(DEFAULT_TEMPLATE)
+
+    @unittest.skipUnless(HAS_TEMPLATE, SKIP_WHY)
+    def test_a_rendered_document_names_nobody(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "anonymous.docx")
+            docx_form.render(ASSESSMENT, out)
+            self.assert_anonymous(out)
+
+    @unittest.skipUnless(HAS_TEMPLATE, SKIP_WHY)
+    def test_somebody_elses_template_does_not_leak_through_either(self):
+        """The fix is in `save`, not only in the file this repo happens to ship."""
+        with tempfile.TemporaryDirectory() as tmp:
+            seeded = os.path.join(tmp, "seeded.docx")
+            self.seed(DEFAULT_TEMPLATE, seeded,
+                      creator="A Real Person", last_modified_by="Another Real Person",
+                      company="Some University")
+            # The seeding is honest: it really is in there before `save` runs.
+            self.assertEqual("A Real Person", docx_form.identity_of(seeded)["creator"])
+            self.assertEqual("Some University", docx_form.identity_of(seeded)["Company"])
+
+            out = os.path.join(tmp, "from-theirs.docx")
+            docx_form.render(ASSESSMENT, out, template_path=seeded)
+            self.assert_anonymous(out)
+            _Doc(out).assert_sound(self)
+
+    @staticmethod
+    def seed(source, target, creator, last_modified_by, company):
+        """A copy of `source` with those three properties written into it."""
+        import re
+
+        with zipfile.ZipFile(str(source)) as src, \
+                zipfile.ZipFile(str(target), "w", zipfile.ZIP_DEFLATED) as out:
+            for info in src.infolist():
+                blob = src.read(info.filename)
+                if info.filename == "docProps/core.xml":
+                    text = blob.decode("utf-8")
+                    text = re.sub(r"<dc:creator>.*?</dc:creator>",
+                                  "<dc:creator>{}</dc:creator>".format(creator), text)
+                    text = re.sub(r"<cp:lastModifiedBy>.*?</cp:lastModifiedBy>",
+                                  "<cp:lastModifiedBy>{}</cp:lastModifiedBy>".format(
+                                      last_modified_by), text)
+                    blob = text.encode("utf-8")
+                elif info.filename == "docProps/app.xml":
+                    text = blob.decode("utf-8")
+                    text = text.replace(
+                        "</Properties>", "<Company>{}</Company></Properties>".format(company))
+                    blob = text.encode("utf-8")
+                out.writestr(info.filename, blob)
+
+
 if __name__ == "__main__":
     unittest.main()

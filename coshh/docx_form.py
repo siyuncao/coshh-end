@@ -42,6 +42,9 @@ The tool drafts; a competent person checks and signs.
   :data:`UNASSESSED_TEXT` in the Hazards column, where it is impossible to miss.
 * An unrecognised exposure route or control measure raises ``ValueError``
   rather than quietly ticking nothing.
+* :meth:`save` strips the template's own ``dc:creator``, ``cp:lastModifiedBy``
+  and ``Company`` out of the package, so a form does not hand a stranger the
+  name of whoever drew the template up (see :func:`strip_identity`).
 """
 
 from __future__ import annotations
@@ -49,6 +52,7 @@ from __future__ import annotations
 import copy
 import datetime
 import random
+import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -163,6 +167,60 @@ DRAFT_NOTICE = (
 #: every other `templates/*.docx` stays git-ignored. See README.
 DEFAULT_TEMPLATE = (
     Path(__file__).resolve().parent.parent / "templates" / "generic-coshh-template.docx")
+
+#: The extended properties that name somebody, in `docProps/app.xml`.
+IDENTIFYING_APP_PROPERTIES = ("Company", "Manager")
+
+_APP_PROPERTY_RE = re.compile(
+    rb"<(" + b"|".join(p.encode() for p in IDENTIFYING_APP_PROPERTIES) +
+    rb")(\s[^>]*)?(?:/>|>.*?</\1>)")
+
+
+def strip_identity(document) -> None:
+    """Take the author, the last editor and the company off a document.
+
+    A `.docx` carries the people who touched it in parts nobody looks at:
+    `docProps/core.xml` holds ``dc:creator`` and ``cp:lastModifiedBy``, and
+    `docProps/app.xml` holds ``Company``. `grep` does not see them because they
+    are inside the zip, so a template that reads as neutral on the page can
+    still name a person and an institution — and every form written from it
+    inherits all three.
+
+    This runs on the way out of :meth:`CoshhForm.save`, so the template the
+    repository ships and somebody else's own template are both anonymous by the
+    time a document is handed to a visitor. It touches nothing a reader sees.
+    """
+    core = document.core_properties
+    core.author = ""
+    core.last_modified_by = ""
+    for part in document.part.package.iter_parts():
+        if str(part.partname) != "/docProps/app.xml":
+            continue
+        blob = getattr(part, "blob", None)
+        if isinstance(blob, bytes):
+            part._blob = _APP_PROPERTY_RE.sub(b"", blob)
+
+
+def identity_of(path) -> Dict[str, str]:
+    """``{"creator", "lastModifiedBy", "Company"}`` read straight out of the zip.
+
+    Deliberately not via ``python-docx``: what matters is the bytes that reach
+    whoever opens the file, and this is the check a test can make of both the
+    shipped template and a rendered document.
+    """
+    found = {"creator": "", "lastModifiedBy": "", "Company": ""}
+    with zipfile.ZipFile(str(path)) as bundle:
+        names = set(bundle.namelist())
+        if "docProps/core.xml" in names:
+            core = bundle.read("docProps/core.xml").decode("utf-8", "replace")
+            for key, tag in (("creator", "dc:creator"), ("lastModifiedBy", "cp:lastModifiedBy")):
+                match = re.search(r"<{t}(?:\s[^>]*)?>(.*?)</{t}>".format(t=tag), core, re.S)
+                found[key] = (match.group(1).strip() if match else "")
+        if "docProps/app.xml" in names:
+            app = bundle.read("docProps/app.xml").decode("utf-8", "replace")
+            match = re.search(r"<Company(?:\s[^>]*)?>(.*?)</Company>", app, re.S)
+            found["Company"] = (match.group(1).strip() if match else "")
+    return found
 
 
 # --------------------------------------------------------------------------
@@ -810,6 +868,9 @@ class CoshhForm:
     def save(self, path) -> Path:
         """Validate, then write the document. Returns the path written."""
         self.validate()
+        # Whoever wrote the template is not the author of this form, and their
+        # employer is not a fact about it. See `strip_identity`.
+        strip_identity(self._doc)
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self._doc.save(str(path))
