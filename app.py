@@ -3,11 +3,18 @@ A small web app around the COSHH drafting pipeline.
 
 Three routes, and a deliberate gap between the second and the third:
 
-    GET  /           paste a lab manual, fill in the header, press the button
+    GET  /           list the substances (the default), or paste a lab manual,
+                     fill in the header, press the button
     POST /draft      read it, show every substance and every tick it proposes,
                      with anything unclassified shouted at the top, and let the
                      chemist correct all of it
     POST /document   turn *the corrected draft* into the .docx and hand it back
+
+Two ways in, one way on. A typed substance list goes to `coshh.substances`,
+which splits each line with a regular expression: no key, no model, no cost. A
+pasted procedure goes to `coshh.manual`, which needs a model to tell a reagent
+from a citation. Both produce the same assessment dict, so `/draft` shows the
+same review page and `/document` writes the same form.
 
 The gap is the safety argument. `coshh.manual` reads a procedure with a language
 model and looks each substance up in PubChem; both of those can be wrong, and a
@@ -49,7 +56,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response
 
-from coshh import docx_form, manual, rules
+from coshh import docx_form, manual, rules, substances
 
 app = FastAPI(title="COSHH draft", docs_url=None, redoc_url=None)
 
@@ -310,8 +317,9 @@ def header_inputs(values: Dict[str, str]) -> str:
 def index() -> HTMLResponse:
     body = """
 <h1>COSHH draft</h1>
-<p class="sub">Paste a lab manual. The tool reads the substances out of it, looks each one
-up in PubChem, and proposes the ticks. You check every one of them before there is a document.</p>
+<p class="sub">List the substances you are using. The tool looks each one up in PubChem and
+proposes the ticks, and you check every one of them before there is a document. No account,
+no key, nothing stored.</p>
 
 <div class="note"><strong>{standing}</strong></div>
 
@@ -320,19 +328,39 @@ up in PubChem, and proposes the ticks. You check every one of them before there 
   <p class="sub">Copied onto the form exactly as you type them. Nothing here is guessed.</p>
   {header}
 
-  {keyfield}
-
-  <h2>The procedure</h2>
-  <p class="sub">Paste the experimental section, or upload a <code>.txt</code> or
-  <code>.docx</code>. Quantities are transcribed word for word, never converted.</p>
-  <textarea name="manual" rows="14" placeholder="To a stirred solution of ..."></textarea>
-  <p style="margin-top:.7rem"><label for="upload">or upload a file</label>
-  <input type="file" id="upload" name="upload" accept=".txt,.docx,.md,text/plain"></p>
+  <h2>The substances</h2>
+  <p class="sub">One per line: what it is, then how much of it. Amounts are transcribed word
+  for word and never converted, a CAS number in brackets is used if you give one, and a line
+  this cannot split keeps its place on the form with a blank amount and a note saying so.</p>
+  <textarea name="substances" rows="10" placeholder="pyrrolidine 7.11 g&#10;triethylamine, 15 mL&#10;3 M HNO3 20 mL&#10;TEMPO 26.8 g (CAS 2564-83-2)"></textarea>
 
   <div class="actions">
-    <button type="submit">Read the manual</button>
-    <span class="sub" style="margin:0">One model call, then a PubChem lookup per substance.</span>
+    <button type="submit">Draft the assessment</button>
+    <span class="sub" style="margin:0">A PubChem lookup per substance. No model call and no key:
+    the list is read here, by a few lines of Python.</span>
   </div>
+
+  <details style="margin-top:2rem">
+    <summary>Or paste the whole procedure and have the substances read out of it</summary>
+    <p class="why">Reading prose is the one step in this tool that needs a language model:
+    a method names things it does not use, defines its own abbreviations, and hides the
+    quantities inside sentences. That step needs a key. Everything else — PubChem, the rules,
+    the document — is the same either way. Leave the substance list above empty to use this.</p>
+
+    {keyfield}
+
+    <h2>The procedure</h2>
+    <p class="sub">Paste the experimental section, or upload a <code>.txt</code> or
+    <code>.docx</code>. Quantities are transcribed word for word, never converted.</p>
+    <textarea name="manual" rows="14" placeholder="To a stirred solution of ..."></textarea>
+    <p style="margin-top:.7rem"><label for="upload">or upload a file</label>
+    <input type="file" id="upload" name="upload" accept=".txt,.docx,.md,text/plain"></p>
+
+    <div class="actions">
+      <button type="submit">Read the procedure</button>
+      <span class="sub" style="margin:0">One model call, then a PubChem lookup per substance.</span>
+    </div>
+  </details>
 </form>
 {keyscript}
 
@@ -600,6 +628,35 @@ yet. Correct anything wrong here — every box below is the box that will be tic
 @app.post("/draft", response_class=HTMLResponse)
 async def draft(request: Request) -> HTMLResponse:
     form = await request.form()
+
+    # The default path, and the reason there is one: a typed substance list is
+    # not prose, so splitting a name from an amount is a regular expression and
+    # not a language model. No key, no cost, the same answer every time.
+    listing = str(form.get("substances") or "")
+    if listing.strip():
+        sent = form.get("upload")
+        if str(form.get("manual") or "").strip() or (
+                sent is not None and getattr(sent, "filename", "")):
+            return error_page(
+                "Two different inputs",
+                "A substance list and a procedure arrived together. Send one or the other: "
+                "assessing both would mean picking one, and the one that was not picked "
+                "would be a set of substances nobody assessed.")
+        try:
+            assessment = substances.assess(
+                listing,
+                title=str(form.get("title") or ""), name=str(form.get("name") or ""),
+                date=str(form.get("date") or ""), college=str(form.get("college") or ""),
+                year=str(form.get("year") or ""))
+        except substances.ListTooLong as exc:
+            return error_page("That list is too long", str(exc))
+        except substances.NothingToList as exc:
+            return error_page("Nothing to assess", str(exc))
+        except Exception as exc:
+            return error_page("Something went wrong reading the list",
+                              "{}: {}".format(type(exc).__name__, exc))
+        return HTMLResponse(page("Check the draft", draft_body(assessment)))
+
     text = str(form.get("manual") or "")
 
     upload = form.get("upload")
