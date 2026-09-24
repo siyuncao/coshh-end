@@ -51,7 +51,7 @@ import random
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 import docx
 from docx.text.paragraph import Paragraph

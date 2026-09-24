@@ -402,6 +402,42 @@ class RowCloningTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_TEMPLATE, SKIP_WHY)
+class ReadBackTest(unittest.TestCase):
+    """`open_document` re-opens a generated file and reports what landed."""
+
+    def test_generated_file_reports_its_own_contents(self):
+        random.seed(3)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "readback.docx")
+        docx_form.render(ASSESSMENT, path)
+
+        form = docx_form.open_document(path)
+        self.assertEqual("Bromination of an activated arene", form.header_values()["title"])
+        self.assertEqual("1  /  2  /  3", form.header_values()["year"])
+
+        row = form.substance_row_values(0)
+        self.assertEqual("Bromine", row["name"])
+        self.assertEqual("2.0 mL", row["amount"])
+        self.assertIn("H330 - Fatal if inhaled", row["hazards"])
+        self.assertEqual(["Eyes", "Skin", "Inhalation"], row["routes"])
+        self.assertIn("Fumehood", row["controls"])
+
+        self.assertTrue(form.risk_values()["Gas Release"]["yes"])
+        self.assertFalse(form.risk_values()["Thermal Runaway"]["yes"])
+        self.assertEqual({"Halogenated", "Aqueous"}, set(form.waste_values()))
+
+    def test_a_generated_file_still_passes_validation(self):
+        random.seed(5)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "roundtrip.docx")
+        docx_form.render(ASSESSMENT, path)
+        docx_form.open_document(path).validate()   # raises if anything is off
+        self.assertIn("word/document.xml", docx_form.document_parts(path))
+
+
+@unittest.skipUnless(HAS_TEMPLATE, SKIP_WHY)
 class RefusalTest(unittest.TestCase):
     """The writer complains rather than quietly doing nothing."""
 
