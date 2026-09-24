@@ -13,7 +13,10 @@ them into your template.
 It is not the assessment. Scale, containment, spill and waste are judgements
 about one procedure in one fume hood, and they stay with the chemist.
 `Approved By` is left blank, and the writer refuses to save a form with
-anything in it.
+anything in it. Every generated document says so on its face: the
+`Special measures:` cell carries a dated line naming the tool and the data
+source, followed by everything still unresolved, so a printed form cannot be
+mistaken for a checked one.
 
 ## The app
 
@@ -84,6 +87,18 @@ h["primary"]["source"]                           # 'Regulation (EC) No 1272/2008
 `found` is `False` when PubChem holds no classification, and the note points
 at the supplier's safety data sheet instead. Silence is not "safe".
 
+Three outcomes, not two, because they send you to different places:
+
+| | `found` | `cid` | what the row says |
+|---|---|---|---|
+| classified | `True` | a number | the codes, with the source and CID beside them |
+| known, unclassified | `False` | a number | `NO CLASSIFICATION FOUND` — read the SDS |
+| name resolved to nothing | `False` | `None` | `NAME NOT RESOLVED` — search by CAS number |
+| lookup never answered | `False` | `None`, `unreachable` | `NOT CHECKED` — and it is not cached, so the next draft retries |
+
+The last one matters under `uvicorn`: one network blip used to freeze "no
+classification" for that substance for the life of the process.
+
 - `safety.py` — GHS labelling for one chemical, from PubChem.
 - `coshh/rules.py` — H-codes to this form's ticks, each with its reason. No
   network, no Word.
@@ -107,9 +122,18 @@ source behind it is not worth copying onto a form somebody signs.
   Ask it about water and ECHA's aggregated registrant data says H315/H319/H335.
   That is what the source says, so that is what the row shows, with the source
   named and linked. Delete it on the draft page.
-- **A name it cannot resolve gets a loud row**, not a blank one:
-  `NO CLASSIFICATION FOUND - check the supplier's safety data sheet`. Type the
-  codes in from the SDS and the draft records that they came from you.
+- **A substance it cannot classify gets a loud row**, not a blank one, and its
+  ticks match: every exposure route, plus gloves and the fume hood, because an
+  unassessed row with nothing ticked reads as "considered, and there is no way
+  in". Type the codes in from the SDS and the draft records that they came from
+  you; empty the box entirely and the banner comes back.
+- **Every row names its source.** The Hazards cell carries the classifier, the
+  PubChem CID and the compound title PubChem actually resolved to, because its
+  name resolver substitutes silently: ask it about `PEG` and it answers with
+  CID 174, ethylene glycol.
+- **A substance read as "mentioned, not used" still gets a row**, marked as
+  unassessed. If the reader was wrong, that is visible on the paper rather than
+  missing from it.
 - **Equipment is not a substance.** A rotary evaporator gets a row saying so and
   a note to assess the physical hazard by hand; it is never given a GHS
   classification it does not have.
@@ -127,11 +151,11 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover
 ```
 
-183 tests, all offline: the PubChem layer runs against a trimmed fixture of its
+212 tests, all offline: the PubChem layer runs against a trimmed fixture of its
 response, and the reader and the web layer run with the model call and the
 lookup injected. One live smoke test is skipped unless `COSHH_LIVE=1`.
 
-The template is not in the repo, so on a fresh clone the 42 tests that actually
+The template is not in the repo, so on a fresh clone the 52 tests that actually
 open or produce a .docx skip with a message saying so. Drop your template in
 and they run.
 
