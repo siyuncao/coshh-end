@@ -20,8 +20,13 @@ mistaken for a checked one.
 
 ## The app
 
+Python 3.9 or newer (`anthropic` and `fastapi` both need it — on older
+versions the second line below fails with a pip resolution error that says
+nothing about Python versions). Check with `python3 -V`, and name the
+interpreter explicitly if your `python3` is older:
+
 ```bash
-python3 -m venv .venv
+python3 -m venv .venv                 # or python3.11 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/uvicorn app:app --port 8000
 ```
@@ -51,7 +56,14 @@ It is never written to disk, never logged, never put in a web address and
 never rendered back into a page — including into an error message, which is
 scrubbed before it is shown. The only place it is kept is your own browser's
 `localStorage`, so you need not retype it, and clearing your site data
-clears it. Get one at <https://console.anthropic.com/settings/keys>.
+clears it. The page is a single form, so the key box is disabled before a
+submit that carries a substance list: the keyless path never puts a
+credential on the wire. Get one at
+<https://console.anthropic.com/settings/keys>.
+
+These promises are about the copy you run. Run it yourself on localhost; do
+not paste your key into somebody else's instance, and if you do host it,
+serve it over HTTPS — a password field on plain HTTP is a password in clear.
 
 If the process running the app has `ANTHROPIC_API_KEY` set — you, running it
 on your own machine — that key is used instead, the box becomes optional and
@@ -93,6 +105,12 @@ A *COSHH Form, Teaching Laboratory* belonging to no institution — headed
 spill to a **supervisor**. That is the only `.docx` in the repository. Every
 other `templates/*.docx` is git-ignored, because a college's own form is its
 own document and this repo is public.
+
+Neutral inside the zip as well as on the page: a `.docx` carries
+`dc:creator`, `cp:lastModifiedBy` and `Company` in `docProps/`, where `grep`
+cannot see them. The shipped form's are empty, and the writer strips those
+three from every document it saves, so your own template does not hand its
+author's name to whoever you give the form to either.
 
 To use your own form instead, point `COSHH_TEMPLATE` at it:
 
@@ -183,6 +201,15 @@ source behind it is not worth copying onto a form somebody signs.
   classification it does not have.
 - **Amounts are transcribed, never converted.** The number on the form is the
   number in the text.
+- **A line that names two substances gets one row and says so.** `sodium
+  borohydride 1.2 g in 10 mL MeOH` is read as one substance, because rejoining
+  the text is the best guess a regular expression can make — and the leftover
+  words go into the review asking you to give the second reagent its own line.
+  Nothing is folded into a name silently.
+- **The waste stream can be read off a name, and says when it was.** Benzyl
+  bromide goes to the halogenated bottle because the name is an organic halide,
+  not because anything classified it; the review line says so and still asks a
+  technician.
 - **It does not draw a reaction scheme.** It writes the procedure's own
   description into that box for you to draw over.
 - **It does not judge scale or containment**, and it does not sign.
@@ -198,12 +225,12 @@ source behind it is not worth copying onto a form somebody signs.
 ## Install and test
 
 ```bash
-python3 -m venv .venv
+python3 -m venv .venv                 # Python 3.9 or newer
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m unittest discover
 ```
 
-241 tests, all offline: the PubChem layer runs against a trimmed fixture of its
+314 tests, all offline: the PubChem layer runs against a trimmed fixture of its
 response, and the reader and the web layer run with the model call and the
 lookup injected. One live smoke test is skipped unless `COSHH_LIVE=1`; nothing
 else needs a key or a network.

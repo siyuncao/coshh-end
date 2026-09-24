@@ -1,7 +1,8 @@
 # Hazard lookups (safety.py) and the test client.
 httpx>=0.27
-# Reading the lab manual (coshh/manual.py). Pinned below 1.0: this venv is
-# Python 3.9 and anthropic 1.x needs 3.10+.
+# Reading the lab manual (coshh/manual.py). Capped below 1.0 so the project
+# still installs on Python 3.9: anthropic 1.x needs 3.10 or newer. Nothing
+# else here needs the cap; raise it once 3.10 is the floor.
 anthropic>=0.125,<1
 # Writing the form (coshh/docx_form.py), and reading an uploaded .docx.
 python-docx>=1.1
