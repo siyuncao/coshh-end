@@ -119,5 +119,27 @@ class ParsingTest(unittest.TestCase):
         self.assertFalse(answer["found"])
 
 
+class ReadoutTest(unittest.TestCase):
+    """The terminal block. Quotable means the source is on it."""
+
+    def test_a_known_chemical_names_its_source_and_codes(self):
+        with mock.patch.object(safety, "find_cid", lambda *a, **k: 516875), \
+             mock.patch.object(safety, "_get", lambda *a, **k: RECORD):
+            safety._cache.clear()
+            text = safety.as_text(safety.hazards("potassium permanganate", "7722-64-7"))
+        self.assertIn("CAS 7722-64-7", text)
+        self.assertIn("1272/2008", text)
+        self.assertIn("H272", text)
+        self.assertIn("GHS03", text)
+        self.assertIn("P301+P317", text)
+
+    def test_an_unknown_chemical_says_so_rather_than_printing_a_blank_label(self):
+        with mock.patch.object(safety, "_get", lambda *a, **k: None):
+            safety._cache.clear()
+            text = safety.as_text(safety.hazards("zz-test-unknown"))
+        self.assertIn("safety data sheet", text)
+        self.assertNotIn("signal", text)
+
+
 if __name__ == "__main__":
     unittest.main()

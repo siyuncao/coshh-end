@@ -33,6 +33,21 @@ classifier, so each is kept apart and named, and the EU harmonised
 classification is quoted first because GB CLP follows it. A code with no
 source behind it is not worth copying onto a form somebody signs.
 
+## From the terminal
+
+```bash
+python safety.py pyrrolidine 123-75-1
+```
+
+```
+pyrrolidine (CAS 123-75-1)
+  source      European Chemicals Agency (ECHA)
+  signal      Danger
+  pictograms  GHS02 Flammable, GHS05 Corrosive, GHS07 Irritant
+  H225        Highly Flammable liquid and vapor
+  ...
+```
+
 ## Install and test
 
 ```bash
