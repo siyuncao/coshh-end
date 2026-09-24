@@ -6,8 +6,11 @@ __pycache__/
 # Kept local: it carries snippets of the private paper-to-order app.
 original-change.patch
 
-# The user supplies their own COSHH .docx template; never commit it.
+# The user supplies their own COSHH .docx template; never commit it. The one
+# exception is the neutral form this app ships with, which belongs to no
+# institution — it is the default the app writes onto.
 templates/*.docx
+!templates/generic-coshh-template.docx
 out/
 *.generated.docx
 .gstack/

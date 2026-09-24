@@ -263,7 +263,10 @@ class RenderTest(unittest.TestCase):
         self.assertEqual("Test College", self.doc.cell_text(TABLE_HEADER, 2, 1))
         # The labels in column 0 are untouched.
         self.assertIn("Title", self.doc.cell_text(TABLE_HEADER, 0, 0))
-        self.assertIn("College", self.doc.cell_text(TABLE_HEADER, 2, 0))
+        # The shipped form says "Department"; a college's own form says
+        # "College". Either way the value goes in the cell beside the label.
+        self.assertIn(docx_form.HEADER_ORG_LABEL,
+                      self.doc.cell_text(TABLE_HEADER, 2, 0))
 
     def test_year_is_underlined_not_replaced(self):
         cell = self.doc.cell(TABLE_HEADER, 2, 3)
@@ -593,6 +596,74 @@ class TemplateShapeTest(unittest.TestCase):
     def test_waste_labels_sit_beside_their_boxes(self):
         for label, (row, col) in WASTE_CELLS.items():
             self.assertEqual(label, self.doc.cell_text(TABLE_WASTE, row, col + 1).strip())
+
+
+# --------------------------------------------------------------------------
+# The form this repo ships
+# --------------------------------------------------------------------------
+
+class ShippedTemplateTest(unittest.TestCase):
+    """The default is the neutral form, and it is in the repository."""
+
+    def test_the_default_is_the_generic_form_and_it_is_present(self):
+        self.assertEqual("generic-coshh-template.docx", DEFAULT_TEMPLATE.name)
+        self.assertTrue(DEFAULT_TEMPLATE.is_file(), DEFAULT_TEMPLATE)
+
+    def test_its_running_head_belongs_to_no_institution(self):
+        with zipfile.ZipFile(str(DEFAULT_TEMPLATE)) as zf:
+            heads = [zf.read(n).decode("utf-8") for n in zf.namelist()
+                     if n.startswith("word/header")]
+        self.assertTrue(heads, "no running head in the shipped template")
+        joined = "".join(heads)
+        self.assertIn("Teaching Laboratory", joined)
+
+    def test_it_says_department_rather_than_naming_a_college(self):
+        doc = _Doc(DEFAULT_TEMPLATE)
+        self.assertIn("Department", doc.cell_text(TABLE_HEADER, 2, 0))
+
+    def test_its_spill_line_says_supervisor(self):
+        doc = _Doc(DEFAULT_TEMPLATE)
+        labels = [doc.label(b)
+                  for b in doc.boxes(doc.cell(TABLE_SUBSTANCES, 2, COL_CONTROL))]
+        self.assertIn("supervisor", labels[0])
+        self.assertNotIn("demonstrator", " ".join(labels))
+
+    def test_a_form_written_from_it_keeps_its_wording_and_its_ticks(self):
+        form = CoshhForm()
+        form.prepare_substance_rows(1)
+        form.fill_substance(0, "toluene", "2.12 g", hazards=["H225"],
+                            routes=["Eyes", "Inhalation"], controls=["Gloves", "Fumehood"])
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "generic.docx")
+            form.save(out)
+            doc = _Doc(out)
+            doc.assert_sound(self)
+            ticked = doc.ticked_labels(TABLE_SUBSTANCES, 1, COL_CONTROL)
+        self.assertIn("Gloves", ticked)
+        self.assertIn("Fumehood", ticked)
+        self.assertTrue(any("supervisor" in label for label in ticked), ticked)
+
+    def test_a_form_worded_for_a_demonstrator_still_gets_the_spill_tick(self):
+        """Another department's wording of the same standing instruction."""
+        form = CoshhForm()
+        form.prepare_substance_rows(1)
+        form.fill_substance(
+            0, "toluene", "2.12 g",
+            controls=["In case of spill, consult a demonstrator, technician "
+                      "or senior member of staff"])
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "aliased.docx")
+            form.save(out)
+            ticked = _Doc(out).ticked_labels(TABLE_SUBSTANCES, 1, COL_CONTROL)
+        self.assertTrue(any("supervisor" in label for label in ticked), ticked)
+
+    def test_a_control_measure_the_form_does_not_offer_is_still_refused(self):
+        """The alias is a second try, not a way for anything to match."""
+        form = CoshhForm()
+        form.prepare_substance_rows(1)
+        with self.assertRaises(ValueError) as cm:
+            form.fill_substance(0, "toluene", controls=["Wear a demonstrator"])
+        self.assertIn("unknown control measure", str(cm.exception))
 
 
 if __name__ == "__main__":

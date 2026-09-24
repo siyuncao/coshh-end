@@ -52,7 +52,10 @@ INHALATION = "Inhalation"
 INGESTION = "Ingestion"
 EXPOSURE_ROUTES: Tuple[str, ...] = (EYES, SKIN, INHALATION, INGESTION)
 
-SPILL = "In case of spill, consult a demonstrator, technician or senior member of staff"
+# The wording of the shipped generic form. A department whose own form says
+# "demonstrator" instead of "supervisor" still gets the tick: `docx_form` falls
+# back to a match that ignores which word a form uses for the person in charge.
+SPILL = "In case of spill, consult a supervisor, technician or senior member of staff"
 SPECTACLES = "Safety spectacles"
 LAB_COAT = "Lab coat"
 GLOVES = "Gloves"

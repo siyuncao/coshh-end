@@ -52,7 +52,7 @@ import random
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 import docx
 from docx.text.paragraph import Paragraph
@@ -87,9 +87,14 @@ COL_CONTROL = 4
 
 EXPOSURE_ROUTES: Tuple[str, ...] = ("Eyes", "Skin", "Inhalation", "Ingestion")
 
+#: What the shipped form calls the third header field. The assessment's own key
+#: for it stays ``college`` — a department writes "Department", a college
+#: writes "College", and the value is copied into the same cell either way.
+HEADER_ORG_LABEL = "Department"
+
 #: The eleven Control Measures options, in the template's own order and wording.
 CONTROL_MEASURES: Tuple[str, ...] = (
-    "In case of spill, consult a demonstrator, technician or senior member of staff",
+    "In case of spill, consult a supervisor, technician or senior member of staff",
     "Safety spectacles",
     "Lab coat",
     "Gloves",
@@ -151,8 +156,13 @@ DRAFT_NOTICE = (
     "assessment until a competent person has checked every row and signed below."
 )
 
-#: The template the user supplies. Git-ignored; see README.
-DEFAULT_TEMPLATE = Path(__file__).resolve().parent.parent / "templates" / "coshh-template.docx"
+#: The form this app ships with: the same six tables and the same checkbox
+#: lists, worded for no particular institution ("Department", "supervisor").
+#: It is committed. A chemist with their own form points `template_path` — or
+#: the `COSHH_TEMPLATE` environment variable the app reads — at that instead;
+#: every other `templates/*.docx` stays git-ignored. See README.
+DEFAULT_TEMPLATE = (
+    Path(__file__).resolve().parent.parent / "templates" / "generic-coshh-template.docx")
 
 
 # --------------------------------------------------------------------------
@@ -352,6 +362,36 @@ def _norm(s: str) -> str:
     return " ".join(str(s).split()).rstrip(":").casefold()
 
 
+#: What different departments call the person in charge of the lab. The spill
+#: control measure is the same instruction either way, so a form that says
+#: "demonstrator" and one that says "supervisor" must tick the same box.
+ROLE_WORDS: Tuple[str, ...] = ("demonstrator", "supervisor", "instructor", "tutor")
+
+
+def _alias(s: str) -> str:
+    """:func:`_norm`, with the word for the person in charge flattened out.
+
+    Used only as a *second* try: an exact match on the template's own wording
+    always wins, so this can never redirect a tick that already had a home.
+    """
+    key = _norm(s)
+    for word in ROLE_WORDS:
+        key = key.replace(word, "\x00role")
+    return key
+
+
+def _by_label(boxes: Dict[str, Any], label: str):
+    """The checkbox for ``label``: the template's wording, then the alias."""
+    box = boxes.get(_norm(label))
+    if box is not None:
+        return box
+    want = _alias(label)
+    for have, candidate in boxes.items():
+        if _alias(have) == want:
+            return candidate
+    return None
+
+
 # --------------------------------------------------------------------------
 # The form
 # --------------------------------------------------------------------------
@@ -384,8 +424,8 @@ class CoshhForm:
         self._tables = self._doc.tables
         if len(self._tables) < 6:
             raise ValueError(
-                "template has {} tables, expected 6 — is this the Chemistry "
-                "Teaching Laboratory COSHH form?".format(len(self._tables))
+                "template has {} tables, expected 6 — is this a COSHH form of "
+                "the shape this writer expects?".format(len(self._tables))
             )
         # First data row of the substance table; moves if the example is dropped.
         self._data_row_start = EXAMPLE_ROW + 1
@@ -642,7 +682,7 @@ class CoshhForm:
         control_boxes = self._option_boxes(cells[COL_CONTROL])
         for wanted, state in [(controls, True), (controls_off, False)]:
             for label in wanted:
-                box = control_boxes.get(_norm(label))
+                box = _by_label(control_boxes, label)
                 if box is None:
                     raise ValueError(
                         "unknown control measure {!r} — the form offers {}".format(
