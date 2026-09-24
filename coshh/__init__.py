@@ -1,5 +1,5 @@
 """
-COSHH form generation: hazard data in, a filled Oxford teaching-lab form out.
+COSHH form generation: hazard data in, a filled teaching-lab form out.
 
 `coshh.rules` is the reasoning layer — it turns GHS hazard codes into the ticks
 this particular form asks for. It holds no network code and no Word code, so it

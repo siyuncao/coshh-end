@@ -190,6 +190,27 @@ class UnassessedTest(unittest.TestCase):
                         "the form may show the chemist's codes, but the draft must say "
                         "they did not come from PubChem")
 
+    def test_emptying_the_hazards_box_is_a_gap_not_an_answer(self):
+        """A blank Hazards cell reads as 'assessed, nothing to report'."""
+        out = fold(form_pairs(self.data, hazards_0=""))
+        row = row_named(out, "toluene")
+        self.assertEqual([], row["hazards"])
+        self.assertTrue(row["unknown"])
+        self.assertTrue(any("deleted by hand" in line for line in out["review"]))
+
+    @unittest.skipUnless(HAS_TEMPLATE, SKIP_WHY)
+    def test_an_emptied_hazards_cell_carries_the_banner_into_the_document(self):
+        import os
+        import tempfile
+
+        out = fold(form_pairs(self.data, hazards_0=""))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "emptied.docx")
+            docx_form.render(out, path)
+            form = docx_form.open_document(path)
+            cell = form.substance_row_values(0)["hazards"]
+        self.assertIn(docx_form.UNASSESSED_TEXT, cell)
+
     def test_leaving_it_alone_keeps_the_loud_banner(self):
         row = row_named(fold(form_pairs(self.data)), "ganymedene")
         self.assertTrue(row["unknown"])
@@ -261,6 +282,24 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("draft was lost", response.text)
 
+    def test_a_baseline_whose_substances_are_not_rows_fails_the_same_way(self):
+        response = self.client.post(
+            "/document", data={"baseline": json.dumps({"substances": "toluene"})})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("draft was lost", response.text)
+
+    @unittest.skipUnless(HAS_TEMPLATE, SKIP_WHY)
+    def test_a_greek_letter_in_the_title_does_not_lose_the_document(self):
+        """Delta, alpha and mu are ordinary in a chemistry title."""
+        data = assessment()
+        data["title"] = "\u0394-lactone synthesis"
+        response = self.client.post(
+            "/document", data=as_data(form_pairs(data, title="\u0394-lactone synthesis")))
+        self.assertEqual(response.status_code, 200)
+        disposition = response.headers["content-disposition"]
+        disposition.encode("latin-1")
+        self.assertIn("filename*=UTF-8", disposition)
+
     @unittest.skipUnless(HAS_TEMPLATE, SKIP_WHY)
     def test_document_returns_a_word_file_as_an_attachment(self):
         response = self.client.post("/document", data=as_data(form_pairs(assessment())))
@@ -280,6 +319,7 @@ class RouteTest(unittest.TestCase):
     @unittest.skipUnless(HAS_TEMPLATE, SKIP_WHY)
     def test_nothing_is_left_on_disk(self):
         import glob
+        import os
         import tempfile
 
         pattern = str(tempfile.gettempdir()) + "/coshh-*.docx"
@@ -331,15 +371,28 @@ class RenderingTest(unittest.TestCase):
 
     def test_filename_is_built_from_the_title(self):
         self.assertEqual(webapp.filename_for({"title": "Nitration of toluene"}),
-                         "COSHH-Nitration-of-toluene.docx")
+                         ("COSHH-Nitration-of-toluene.docx",
+                          "COSHH-Nitration-of-toluene.docx"))
 
     def test_filename_survives_a_hostile_title(self):
-        name = webapp.filename_for({"title": "../../etc/passwd"})
-        self.assertNotIn("/", name)
-        self.assertTrue(name.endswith(".docx"))
+        for name in webapp.filename_for({"title": "../../etc/passwd"}):
+            self.assertNotIn("/", name)
+            self.assertTrue(name.endswith(".docx"))
 
     def test_filename_falls_back_when_there_is_no_title(self):
-        self.assertEqual(webapp.filename_for({}), "COSHH-coshh.docx")
+        self.assertEqual(webapp.filename_for({}), ("COSHH-coshh.docx", "COSHH-coshh.docx"))
+
+    def test_a_greek_letter_in_the_title_is_an_ordinary_title(self):
+        """Response headers are latin-1; a chemistry title routinely is not."""
+        ascii_name, full = webapp.filename_for({"title": "\u0394-lactone synthesis"})
+        ascii_name.encode("latin-1")            # the header must survive this
+        self.assertEqual("COSHH--lactone-synthesis.docx", ascii_name)
+        self.assertIn("\u0394", full)
+
+    def test_a_title_of_nothing_but_greek_still_names_the_file(self):
+        ascii_name, _full = webapp.filename_for({"title": "\u03b1\u03b2\u03b3"})
+        ascii_name.encode("latin-1")
+        self.assertEqual("COSHH-coshh.docx", ascii_name)
 
 
 class UploadTest(unittest.TestCase):

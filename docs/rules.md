@@ -6,7 +6,7 @@ it is the part a demonstrator should be able to read and disagree with.
 
 ## What the form will accept
 
-The Oxford *COSHH Form, Chemistry Teaching Laboratory* asks closed questions.
+The *COSHH Form, Chemistry Teaching Laboratory* asks closed questions.
 Per substance: which of **four exposure routes** apply, and which of **eleven
 control measures** are in use. Per experiment: **four yes/no risk questions**,
 and which of **six waste streams** get filled. There is nowhere to write "it
@@ -522,7 +522,7 @@ Two safety nets:
 ## Where this is deliberately more cautious than autocoshh
 
 [`aymannel/autocoshh`](https://github.com/aymannel/autocoshh) (MIT) fills the
-same Oxford form and was read for this table — its `autocoshh.db` confirmed the
+same form and was read for this table — its `autocoshh.db` confirmed the
 eleven control options and their order, and the shape of code → route/control
 mapping is its idea. Credit where it is due. Five rules here differ on purpose:
 

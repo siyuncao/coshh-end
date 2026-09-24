@@ -1,7 +1,7 @@
 """
 From GHS hazard codes to the ticks this COSHH form asks for.
 
-The form (Oxford, *COSHH Form, Chemistry Teaching Laboratory*) does not ask for
+The form (*COSHH Form, Chemistry Teaching Laboratory*) does not ask for
 prose. It asks, per substance, which of four **exposure routes** apply and which
 of eleven **control measures** are in use, then asks the whole experiment four
 yes/no questions about **specific risks** and which **waste streams** it fills.
@@ -27,7 +27,7 @@ classes are what the codes mean; the reason strings are written from the code's
 own published wording rather than from a habit about the substance.
 
 Credit: the option lists and the shape of the code -> exposure/control mapping
-were checked against `aymannel/autocoshh` (MIT), which fills the same Oxford
+were checked against `aymannel/autocoshh` (MIT), which fills the same
 form. Where this module is deliberately more cautious than that one, the
 divergence is marked `DIVERGENCE` in the comments and listed in docs/rules.md.
 """

@@ -45,7 +45,7 @@ file is unlinked before the response is sent.
 
 ### Supply your own template
 
-The form is an Oxford *COSHH Form, Chemistry Teaching Laboratory* .docx, and
+The form is a *COSHH Form, Chemistry Teaching Laboratory* .docx, and
 **no template is committed to this repo** — it is your document, and this repo
 is public. Put yours at:
 

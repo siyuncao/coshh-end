@@ -31,6 +31,8 @@ import io
 import json
 import os
 import tempfile
+import unicodedata
+from urllib.parse import quote
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -573,6 +575,16 @@ def corrected(baseline: Dict[str, Any], form: Any) -> Dict[str, Any]:
         typed = [line.strip() for line in
                  str(form.get("hazards_{}".format(i)) or "").splitlines() if line.strip()]
         new["hazards"] = typed
+        if not typed:
+            # Clearing the box is not an answer. A blank Hazards cell reads as
+            # "assessed, nothing to report" to whoever signs, which is the one
+            # thing this tool exists to prevent, so it goes back through the
+            # no-classification banner and is loud on both the page and the file.
+            new["unknown"] = True
+            extra_review.append(
+                "{}: the hazards on this row were deleted by hand and nothing replaced them. "
+                "The Hazards cell will carry the no-classification banner until you fill it "
+                "in.".format(new["name"] or "a row"))
         if row.get("unknown") and typed:
             # The banner would contradict what the chemist just wrote, so it goes;
             # the provenance does not.
@@ -611,11 +623,22 @@ def corrected(baseline: Dict[str, Any], form: Any) -> Dict[str, Any]:
     return out
 
 
-def filename_for(assessment: Dict[str, Any]) -> str:
+def filename_for(assessment: Dict[str, Any]) -> Tuple[str, str]:
+    """(an ASCII filename, the full one) for the Content-Disposition header.
+
+    `ch.isalnum()` is true of Greek letters and of CJK, and Starlette encodes
+    response headers as latin-1, so a title like "Delta-lactone synthesis"
+    written with the actual Greek letter turned the whole download into a 500 —
+    after the model call and every PubChem lookup had already been paid for, and
+    on a POST the chemist cannot simply reload. Greek letters are ordinary in a
+    chemistry title, so the stem is folded to ASCII for the plain `filename` and
+    the real one is sent alongside it per RFC 5987.
+    """
     stem = "".join(ch if (ch.isalnum() or ch in " -_") else "-"
                    for ch in (assessment.get("title") or "coshh")).strip()
-    stem = "-".join(stem.split()) or "coshh"
-    return "COSHH-{}.docx".format(stem[:60])
+    stem = "-".join(stem.split())[:60] or "coshh"
+    ascii_stem = unicodedata.normalize("NFKD", stem).encode("ascii", "ignore").decode() or "coshh"
+    return "COSHH-{}.docx".format(ascii_stem), "COSHH-{}.docx".format(stem)
 
 
 @app.post("/document")
@@ -628,6 +651,9 @@ async def document(request: Request) -> Response:
                           "The hidden draft could not be read back. Start again.")
     if not isinstance(baseline, dict):
         return error_page("The draft was lost", "The hidden draft was not an assessment.")
+    if not isinstance(baseline.get("substances") or [], list):
+        return error_page("The draft was lost",
+                          "The hidden draft's substance list was not a list of rows.")
 
     assessment = corrected(baseline, form)
     if not assessment["substances"]:
@@ -660,11 +686,12 @@ async def document(request: Request) -> Response:
         except OSError:
             pass
 
+    ascii_name, full_name = filename_for(assessment)
+    disposition = "attachment; filename=\"{}\"".format(ascii_name)
+    if full_name != ascii_name:
+        disposition += "; filename*=UTF-8\'\'{}".format(quote(full_name, safe=""))
     return Response(
         content=payload,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={
-            "Content-Disposition": "attachment; filename=\"{}\"".format(filename_for(assessment)),
-            "Cache-Control": "no-store",
-        },
+        headers={"Content-Disposition": disposition, "Cache-Control": "no-store"},
     )

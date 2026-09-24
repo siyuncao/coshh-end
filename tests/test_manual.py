@@ -393,10 +393,10 @@ class HeaderTest(unittest.TestCase):
                              lookup=looker({}), **header)
 
     def test_header_fields_are_copied_not_invented(self):
-        out = self.assess(title="Nitration of toluene", name="S. Cao",
+        out = self.assess(title="Nitration of toluene", name="A. Chemist",
                           date="24/09/2026", college="Univ", year="2")
         self.assertEqual(out["title"], "Nitration of toluene")
-        self.assertEqual(out["name"], "S. Cao")
+        self.assertEqual(out["name"], "A. Chemist")
         self.assertEqual(out["date"], "24/09/2026")
         self.assertEqual(out["college"], "Univ")
         self.assertEqual(out["year"], "2")

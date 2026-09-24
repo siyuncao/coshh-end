@@ -384,8 +384,8 @@ class CoshhForm:
         self._tables = self._doc.tables
         if len(self._tables) < 6:
             raise ValueError(
-                "template has {} tables, expected 6 — is this the Oxford "
-                "Chemistry Teaching Laboratory COSHH form?".format(len(self._tables))
+                "template has {} tables, expected 6 — is this the Chemistry "
+                "Teaching Laboratory COSHH form?".format(len(self._tables))
             )
         # First data row of the substance table; moves if the example is dropped.
         self._data_row_start = EXAMPLE_ROW + 1

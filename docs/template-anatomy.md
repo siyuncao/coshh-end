@@ -1,6 +1,6 @@
 # COSHH template anatomy
 
-How the Oxford *COSHH Form, Chemistry Teaching Laboratory* `.docx` is built, and how to
+How the *COSHH Form, Chemistry Teaching Laboratory* `.docx` is built, and how to
 fill it programmatically. Every claim below was produced by running code against the file
 (`python-docx` + `lxml`, plus raw `unzip` of the OPC package) and re-verified by writing a
 document and re-opening it.
