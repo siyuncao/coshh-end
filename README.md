@@ -1,14 +1,14 @@
 # coshh-end
 
-A lab manual goes in; a filled-in COSHH form comes out as a Word document,
-on your own template, for a competent person to check and sign.
+A list of substances — or a whole lab manual — goes in; a filled-in COSHH form
+comes out as a Word document, for a competent person to check and sign.
 
 **COSHH** (Control of Substances Hazardous to Health) is the assessment a UK
 lab fills in before anyone uses a substance. Every one of them starts from
 the same handful of facts: the pictograms, the signal word, the H numbers and
 the P numbers. This fetches that part from PubChem, free and without an API
 key, works out which of the form's boxes those codes argue for, and writes
-them into your template.
+them onto the form — the neutral one this repo ships, or your own.
 
 It is not the assessment. Scale, containment, spill and waste are judgements
 about one procedure in one fume hood, and they stay with the chemist.
@@ -23,44 +23,88 @@ mistaken for a checked one.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-export ANTHROPIC_API_KEY=...          # reading the manual needs a model
 .venv/bin/uvicorn app:app --port 8000
 ```
 
-Then open <http://127.0.0.1:8000>.
+Then open <http://127.0.0.1:8000>. No key, no account, no database.
+
+### Two ways in, and only one of them costs anything
+
+Reading prose is the only step in this tool that needs a language model.
+PubChem, the rule table and the document are deterministic, offline-ish and
+free, so they are on the near side of that line:
+
+| | needs a model | needs a key |
+|---|---|---|
+| **A substance list** — one per line, `pyrrolidine 7.11 g`, `3 M HNO3 20 mL` | no | no |
+| **A pasted procedure** — the prose of a method, substances read out of it | yes | yes, yours |
+
+The list path is the default because it is the one that asks nothing of you.
+A few lines of Python split each line into a name and an amount; everything
+after that — the PubChem lookup, the ticks, the .docx — is the same code
+either way.
+
+**Whose key pays.** The procedure path takes an Anthropic API key from a
+password box on the page. It is your key and it pays for your own call: it
+is sent with that one request, used for that one model call, and then gone.
+It is never written to disk, never logged, never put in a web address and
+never rendered back into a page — including into an error message, which is
+scrubbed before it is shown. The only place it is kept is your own browser's
+`localStorage`, so you need not retype it, and clearing your site data
+clears it. Get one at <https://console.anthropic.com/settings/keys>.
+
+If the process running the app has `ANTHROPIC_API_KEY` set — you, running it
+on your own machine — that key is used instead, the box becomes optional and
+the page says the server is paying. Running it without one is fine: the list
+path never asks for a key at all.
+
+```bash
+export ANTHROPIC_API_KEY=...          # optional: only for the procedure path
+.venv/bin/uvicorn app:app --port 8000
+```
 
 Three pages, and the gap between the second and the third is the point:
 
 | | |
 |---|---|
-| `GET /` | Paste the experimental procedure, or upload a `.txt` / `.docx`, and fill in Title, Name, Date, College, Year. |
+| `GET /` | List the substances, or paste the experimental procedure / upload a `.txt` / `.docx`, and fill in Title, Name, Date, Department, Year. |
 | `POST /draft` | Shows what was read: every substance, its amount transcribed word for word, its H-codes with the source named and linked, and every box that will be ticked, with anything PubChem could not classify shouted at the top. **Everything on this page is editable.** |
 | `POST /document` | Turns *the corrected draft* into the .docx and hands it back as a download. |
 
-The tool never goes from pasted text to Word in one step. A language model
-reads the procedure and PubChem answers the lookups; both can be wrong, and a
-COSHH form is a document somebody signs. So it shows its work, you correct it,
-and only then is there a file.
+The tool never goes from what you typed to Word in one step. PubChem answers
+the lookups, and on the procedure path a language model reads the prose; both
+can be wrong, and a COSHH form is a document somebody signs. So it shows its
+work, you correct it, and only then is there a file.
 
 Nothing is persisted. The manual you paste is held for the length of the
 request; the document is built in a temporary file, read into memory, and the
 file is unlinked before the response is sent.
 
-### Supply your own template
+### The form it writes onto
 
-The form is a *COSHH Form, Chemistry Teaching Laboratory* .docx, and
-**no template is committed to this repo** — it is your document, and this repo
-is public. Put yours at:
+It ships with one, so there is nothing to supply:
 
 ```
-templates/coshh-template.docx
+templates/generic-coshh-template.docx
 ```
 
-which `.gitignore` excludes, or point `COSHH_TEMPLATE` at it:
+A *COSHH Form, Teaching Laboratory* belonging to no institution — headed
+"COSHH Form / Teaching Laboratory", asking for a **Department**, telling a
+spill to a **supervisor**. That is the only `.docx` in the repository. Every
+other `templates/*.docx` is git-ignored, because a college's own form is its
+own document and this repo is public.
+
+To use your own form instead, point `COSHH_TEMPLATE` at it:
 
 ```bash
 COSHH_TEMPLATE=~/my-coshh-form.docx .venv/bin/uvicorn app:app --port 8000
 ```
+
+or drop it at `templates/coshh-template.docx`, which `.gitignore` still
+excludes. A form that says "demonstrator" where the shipped one says
+"supervisor" still gets that tick — the control-measure lookup ignores which
+word a form uses for the person in charge — but a control measure the form
+does not offer at all is refused rather than quietly dropped.
 
 The writer addresses the template by table and cell position, and ticks the
 checkboxes that are already in it, so a template with the same five-column
@@ -142,6 +186,14 @@ source behind it is not worth copying onto a form somebody signs.
 - **It does not draw a reaction scheme.** It writes the procedure's own
   description into that box for you to draw over.
 - **It does not judge scale or containment**, and it does not sign.
+- **Your key buys one call, not a promise.** The procedure path is only as good
+  as the model reading it, and it is your key that pays for the attempt —
+  including an attempt that comes back wrong. The list path costs nothing and
+  asks nothing of a model, which is why it is the default.
+- **The shipped form is a form, not your form.** If your department's COSHH
+  paperwork differs — different tables, different control measures — point
+  `COSHH_TEMPLATE` at yours; see `docs/template-anatomy.md` for what the writer
+  assumes.
 
 ## Install and test
 
@@ -151,13 +203,14 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover
 ```
 
-212 tests, all offline: the PubChem layer runs against a trimmed fixture of its
+241 tests, all offline: the PubChem layer runs against a trimmed fixture of its
 response, and the reader and the web layer run with the model call and the
-lookup injected. One live smoke test is skipped unless `COSHH_LIVE=1`.
+lookup injected. One live smoke test is skipped unless `COSHH_LIVE=1`; nothing
+else needs a key or a network.
 
-The template is not in the repo, so on a fresh clone the 52 tests that actually
-open or produce a .docx skip with a message saying so. Drop your template in
-and they run.
+Because the neutral form is committed, the tests that open or produce a .docx
+run on a fresh clone — including the one that writes a document from the
+shipped template and reads the XML back to check the ticks.
 
 Lookups are cached for a week; PubChem asks for no more than five requests a
 second and no key. The reader uses `claude-sonnet-5` by default; override with
