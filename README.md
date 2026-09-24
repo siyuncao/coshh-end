@@ -131,6 +131,10 @@ python3 -m venv .venv
 response, and the reader and the web layer run with the model call and the
 lookup injected. One live smoke test is skipped unless `COSHH_LIVE=1`.
 
+The template is not in the repo, so on a fresh clone the 42 tests that actually
+open or produce a .docx skip with a message saying so. Drop your template in
+and they run.
+
 Lookups are cached for a week; PubChem asks for no more than five requests a
 second and no key. The reader uses `claude-sonnet-5` by default; override with
 `COSHH_MODEL`.

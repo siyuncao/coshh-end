@@ -21,6 +21,12 @@ import app as webapp
 from coshh import docx_form, rules
 from tests.test_manual import extractor, looker, pubchem, substance
 
+# The template is the user's own document and is not in the repo, so the tests
+# that actually produce a .docx skip without it. Everything else still runs.
+HAS_TEMPLATE = docx_form.DEFAULT_TEMPLATE.is_file()
+SKIP_WHY = "template not present at {} (the user supplies their own)".format(
+    docx_form.DEFAULT_TEMPLATE)
+
 
 # --------------------------------------------------------------------------
 # A real assessment, produced by running the reader offline
@@ -137,6 +143,7 @@ class UntickingTest(unittest.TestCase):
         pairs = [(k, v) for k, v in form_pairs(self.data) if k != "route_0"]
         self.assertEqual(fold(pairs)["substances"][0]["exposure"], [])
 
+    @unittest.skipUnless(HAS_TEMPLATE, SKIP_WHY)
     def test_an_untick_survives_into_the_document(self):
         pairs = [(k, v) for k, v in form_pairs(self.data)
                  if not (k == "control_1" and v == "Fumehood")]
@@ -254,6 +261,7 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("draft was lost", response.text)
 
+    @unittest.skipUnless(HAS_TEMPLATE, SKIP_WHY)
     def test_document_returns_a_word_file_as_an_attachment(self):
         response = self.client.post("/document", data=as_data(form_pairs(assessment())))
         self.assertEqual(response.status_code, 200)
@@ -264,10 +272,12 @@ class RouteTest(unittest.TestCase):
         self.assertIn(".docx", response.headers["content-disposition"])
         self.assertTrue(response.content.startswith(b"PK"), "not a zip, so not a .docx")
 
+    @unittest.skipUnless(HAS_TEMPLATE, SKIP_WHY)
     def test_the_document_is_not_cached(self):
         response = self.client.post("/document", data=as_data(form_pairs(assessment())))
         self.assertEqual(response.headers.get("cache-control"), "no-store")
 
+    @unittest.skipUnless(HAS_TEMPLATE, SKIP_WHY)
     def test_nothing_is_left_on_disk(self):
         import glob
         import tempfile
