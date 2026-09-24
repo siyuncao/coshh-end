@@ -28,6 +28,11 @@ What this module refuses to do:
   blank, plus a line in `review` saying which line it was and that nobody read
   it. Silence is the one outcome that is never correct here: a reagent missing
   from a COSHH form is a reagent nobody assessed.
+* **Fold text into a name quietly.** `sodium borohydride 1.2 g in 10 mL MeOH`
+  is one line naming two substances. Rejoining it into one row is still the
+  best reading of the text, but the leftover words earn a line in `review`
+  asking for the second substance on its own line — otherwise the methanol is
+  in nobody's row and nothing anywhere says so.
 * **Convert anything.** `7.11 g` reaches the form as `7.11 g`. Ranges, `~`,
   `2 x 20 mL` and µL all survive character for character; this is the field a
   chemist reads back off the paper and compares with the balance.
@@ -149,25 +154,82 @@ _BRACKETS_RE = re.compile(r"\s*[(\[][^()\[\]]*[)\]]")
 #: "nitric acid") so that PubChem is searched for something it has heard of. The
 #: list is closed and boring on purpose: it strips grade, strength and state,
 #: and it is never allowed to strip its way to a *different* substance.
-_QUALIFIER_RE = re.compile(
-    r"^(?:"
+_QUALIFIER = (
     r"\d+(?:[.,]\d+)?\s*(?:M|mM|N|%|w/w|v/v|wt\s*%)|"
     r"concentrated|conc\.?|dilute|dil\.?|saturated|sat\.?[dn]?|aqueous|aq\.?|"
     r"anhydrous|dry|dried|absolute|abs\.?|glacial|fuming|technical|reagent[- ]grade|"
     r"freshly\s+distilled|distilled|degassed|solid|powdered|granular|"
     r"\d+(?:[.,]\d+)?\s*%"
-    r")\b[\s,.:-]*",
-    re.IGNORECASE)
+)
+#: `\b` would be wrong here: half these alternatives end in `%` or `.`, and a
+#: word boundary after a non-word character demands a word character next, so
+#: `95%` at the end of a fragment matched nothing at all. What is meant is
+#: "the qualifier is not the front of a longer word" — `dry` but not `dryer`.
+_ENDS_QUALIFIER = r"(?![A-Za-z0-9])"
+_QUALIFIER_RE = re.compile(
+    r"^(?:" + _QUALIFIER + r")" + _ENDS_QUALIFIER + r"[\s,.:-]*", re.IGNORECASE)
+#: The same list, but the fragment has to be *nothing but* a qualifier.
+_QUALIFIER_ONLY_RE = re.compile(
+    r"^(?:" + _QUALIFIER + r")[\s,.:-]*$", re.IGNORECASE)
 
 #: Words that are only a substance in company. Strip "dry" off "dry ice" and the
 #: search term becomes "ice", which PubChem answers with water — a different
 #: molecule, a different form, and nobody the wiser. So the stripping stops here.
 _ONLY_IN_COMBINATION = frozenset({"ice", "acid", "base", "solution", "gas", "powder"})
 
+#: What a bottle contains, written out: "60% dispersion in mineral oil",
+#: "solution in water". Only ever matched against a *trailing* comma fragment.
+_DISPERSION_RE = re.compile(
+    r"^(?:dispersion|solution|suspension|slurry|emulsion)\s+in\s+\S", re.IGNORECASE)
+
+
+def _is_qualifier_only(fragment: str) -> bool:
+    """True when a fragment describes the bottle and names nothing new.
+
+    `95%`, `2 M`, `anhydrous`, `60% dispersion in mineral oil`. Used on the last
+    comma-separated piece of a name and nowhere else, so the worst it can do is
+    shorten a search term — the row's own label keeps every word that was typed.
+    """
+    plain = _tidy(fragment)
+    while plain:
+        if _QUALIFIER_ONLY_RE.match(plain):
+            return True
+        stripped = _tidy(_QUALIFIER_RE.sub("", plain))
+        if stripped == plain:
+            break
+        plain = stripped
+    return not plain or bool(_DISPERSION_RE.match(plain))
+
+
+def _drop_trailing_qualifiers(plain: str) -> str:
+    """`sodium borohydride, 95%` -> `sodium borohydride`.
+
+    "name, grade, amount" is one of the commonest ways a reagent list is
+    written, and the bracketed form of the same thing — `sodium hydride (60%
+    dispersion in mineral oil)` — already resolved, so leaving the comma form to
+    search PubChem for "sodium borohydride, 95%" (which resolves to nothing) was
+    both lossy and inconsistent. The first fragment is never dropped: it is the
+    only part guaranteed to be the substance.
+    """
+    if "," not in plain:
+        return plain
+    parts = plain.split(",")
+    kept = len(parts)
+    while kept > 1 and _is_qualifier_only(parts[kept - 1]):
+        shorter = _tidy(",".join(parts[:kept - 1]))
+        if not shorter or shorter.lower() in _ONLY_IN_COMBINATION:
+            break                               # "acid" is not a substance
+        kept -= 1
+    if kept == len(parts):
+        # `N,N-dimethylformamide` and `1,3-propanediol` come back character for
+        # character: the pieces are rejoined on the comma they were split on.
+        return plain
+    return _tidy(",".join(parts[:kept]))
+
 
 def _search_name(name: str) -> str:
     """The plain chemical name to search PubChem for, or "" if it is already it."""
-    plain = _tidy(_BRACKETS_RE.sub(" ", name))
+    plain = _drop_trailing_qualifiers(_tidy(_BRACKETS_RE.sub(" ", name)))
     while True:
         stripped = _tidy(_QUALIFIER_RE.sub("", plain))
         if stripped == plain or not stripped:
@@ -268,6 +330,8 @@ def parse_line(line: str) -> Optional[Dict[str, Any]]:
         primary = matches[0]
 
     amount = ""
+    remark = ""                 # a short aside a comma split off, for the tag
+    head = ""                   # the pre-amount text, when the tail was glued on
     if primary is None:
         name = _tidy(work)
     else:
@@ -280,25 +344,52 @@ def parse_line(line: str) -> Optional[Dict[str, Any]]:
             # its name. Anything else is two halves of one name, rejoined.
             tail = work[end:].lstrip()
             if tail[:1] in (",", ";", "(", "[", "-", "–", "—"):
-                name, note = before, "; ".join(p for p in (note, after) if p)
+                name, remark = before, after
+                note = "; ".join(p for p in (note, (
+                    "the line's remark {!r} was kept as a note and not assessed - if it "
+                    "names another substance, give it its own line so it gets its own "
+                    "row".format(after))) if p)
             else:
+                # `sodium borohydride 1.2 g in 10 mL MeOH` is one row and two
+                # substances, and the methanol is in nobody's row. Rejoining is
+                # still the best reading of the text, but it is never silent:
+                # the fold is said out loud, and PubChem is searched for the
+                # half of the line that came before the amount.
                 name = _tidy(before + " " + after)
+                head = before
+                note = "; ".join(p for p in (note, (
+                    "the text after the amount ({!r}) was read as part of the name; if "
+                    "this line names a second substance, put it on its own line so it "
+                    "gets its own row".format(after))) if p)
         elif before:
             name = before
         else:
             name = _tidy(_LEADING_OF_RE.sub("", after))
 
     if not name:
-        # The line was an amount and nothing else. It is still not deleted.
-        name = raw
-        amount = ""
-        note = "; ".join(p for p in
-                         (note, "no substance name could be read from this line") if p)
+        if cas:
+            # `CAS 64-17-5, 500 mL` names the substance, just not in words, and
+            # PubChem answers a CAS number first. Throwing the amount away here
+            # put "500 mL" in the Name cell and left Amount — the column read
+            # back against the balance — blank.
+            name = "CAS " + cas
+            note = "; ".join(p for p in (
+                note, "identified by CAS number only - write the substance's name in") if p)
+        else:
+            # The line was an amount and nothing else. It is still not deleted.
+            name = raw
+            amount = ""
+            note = "; ".join(p for p in
+                             (note, "no substance name could be read from this line") if p)
 
     # `dichloromethane (anhydrous)` is the row's label and `dichloromethane` is
     # the search term. `manual.assess` reports the difference and falls back to
     # the label if the search term finds nothing, so neither is lost.
     lookup_name = _search_name(name)
+    if head:
+        # The glued-on tail is not part of any substance's name, and leaving it
+        # in the search term costs the row its classification outright.
+        lookup_name = _search_name(head) or head
 
     return {
         "name": name,
@@ -308,7 +399,7 @@ def parse_line(line: str) -> Optional[Dict[str, Any]]:
         "amount": amount,
         # Only what the line itself said. Nothing here decides that something is
         # a solvent or a catalyst.
-        "role": note if note and primary is not None and amount else "",
+        "role": remark if remark and primary is not None and amount else "",
         "used": True,
         # The line as typed, which is what the review page quotes back.
         "source_line": raw,

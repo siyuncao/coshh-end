@@ -76,6 +76,14 @@ class SplittingALine(unittest.TestCase):
         ("silica gel", "silica gel", ""),
         # Molarity is what is in the bottle, not how much is being used.
         ("0.5 M NaOH", "0.5 M NaOH", ""),
+        # "name, grade, amount" — the grade stays on the label and comes off
+        # the search term only (see `TheSearchTerm`).
+        ("sodium borohydride, 95%, 0.80 g", "sodium borohydride, 95%", "0.80 g"),
+        ("hydrochloric acid, 2 M, 30 mL", "hydrochloric acid, 2 M", "30 mL"),
+        # Two substances on one line. One row is the best reading of the text,
+        # and the fold is said out loud rather than swallowed.
+        ("sodium borohydride 1.2 g in 10 mL MeOH",
+         "sodium borohydride in 10 mL MeOH", "1.2 g"),
     )
 
     def test_every_line_splits_the_way_a_chemist_reads_it(self):
@@ -161,6 +169,39 @@ class TheSearchTerm(unittest.TestCase):
                 self.assertEqual(entry["name"], name)
                 self.assertEqual(entry["lookup_name"], search)
 
+    def test_a_grade_after_a_comma_comes_off_the_search_term_too(self):
+        """`sodium borohydride, 95%` is a reagent PubChem knows by its first half."""
+        for line, name, search in (
+                ("sodium borohydride, 95%, 0.80 g", "sodium borohydride, 95%",
+                 "sodium borohydride"),
+                ("hydrochloric acid, 2 M, 30 mL", "hydrochloric acid, 2 M",
+                 "hydrochloric acid"),
+                ("sodium hydride, 60% dispersion in mineral oil, 1.2 g",
+                 "sodium hydride, 60% dispersion in mineral oil", "sodium hydride")):
+            with self.subTest(line=line):
+                entry = parsed(line)
+                self.assertEqual(entry["name"], name)
+                self.assertEqual(entry["lookup_name"], search)
+
+    def test_the_amount_survives_a_grade_after_a_comma(self):
+        self.assertEqual(parsed("sodium borohydride, 95%, 0.80 g")["amount"], "0.80 g")
+
+    def test_a_comma_inside_a_name_is_never_split_on(self):
+        """`N,N-` and `1,3-` are the name, and the first fragment is never dropped."""
+        self.assertEqual(parsed("N,N-dimethylformamide (DMF): 3 mL")["lookup_name"],
+                         "N,N-dimethylformamide")
+        self.assertEqual(parsed("1,3-propanediol 5-10 g")["lookup_name"], "")
+
+    def test_text_glued_back_on_after_the_amount_is_not_searched_for(self):
+        """`diethyl ether x 3` resolves to nothing; `diethyl ether` is the reagent."""
+        for line, search in (("diethyl ether 100 mL x 3", "diethyl ether"),
+                             ("sodium azide 0.5 g  # DO NOT put down the sink",
+                              "sodium azide"),
+                             ("sodium borohydride 1.2 g in 10 mL MeOH",
+                              "sodium borohydride")):
+            with self.subTest(line=line):
+                self.assertEqual(parsed(line)["lookup_name"], search)
+
     def test_a_plain_name_gets_no_second_search_term(self):
         self.assertEqual(parsed("pyrrolidine 7.11 g")["lookup_name"], "")
 
@@ -185,6 +226,35 @@ class NothingIsDropped(unittest.TestCase):
         self.assertEqual(entry["name"], "5 g")
         self.assertEqual(entry["amount"], "")
         self.assertIn("no substance name", entry["parse_note"])
+
+    def test_a_line_identified_only_by_cas_number_keeps_its_amount(self):
+        """The Amount cell is the column read back against the balance."""
+        entry = parsed("CAS 64-17-5, 500 mL")
+        self.assertEqual(entry["name"], "CAS 64-17-5")
+        self.assertEqual(entry["amount"], "500 mL")
+        self.assertEqual(entry["cas"], "64-17-5")
+        self.assertIn("write the substance's name in", entry["parse_note"])
+
+    def test_a_second_substance_on_one_line_is_said_out_loud(self):
+        """The dangerous shape: a tail with no comma in front of it, glued back on.
+
+        One row is still the best reading of the text — but the methanol is in
+        nobody's row, and that has to reach the person signing.
+        """
+        notes = substances.notes_for(
+            substances.parse_list("sodium borohydride 1.2 g in 10 mL MeOH\n"))
+        self.assertEqual(len(notes), 1)
+        self.assertIn("in 10 mL MeOH", notes[0])
+        self.assertIn("its own line", notes[0])
+
+    def test_a_remark_after_a_comma_is_a_question_not_an_annotation(self):
+        """"ethanol: dried over MgSO4." reads as a note about the ethanol."""
+        notes = substances.notes_for(
+            substances.parse_list("ethanol 30 mL, dried over MgSO4\n"))
+        self.assertEqual(len(notes), 1)
+        self.assertIn("'dried over MgSO4'", notes[0])
+        self.assertIn("not assessed", notes[0])
+        self.assertIn("its own line", notes[0])
 
     def test_only_a_line_with_no_letter_and_no_digit_is_skipped(self):
         for blank in ("", "   ", "-----", "\t", " , "):
@@ -341,6 +411,37 @@ class TheWholePath(unittest.TestCase):
     def test_the_waste_streams_come_out_of_the_rule_table(self):
         self.assertTrue(set(self.data["waste"]) <= set(rules.WASTE_STREAMS))
         self.assertIn(rules.HALOGENATED, self.data["waste"])
+
+
+class LinesThatUsedToLoseTheirClassification(unittest.TestCase):
+    """A search term with a typed comment or a grade in it resolves to nothing.
+
+    Both of these used to reach PubChem with the whole line in them, so the row
+    came back `NAME NOT RESOLVED` with no codes at all — the flammability of
+    diethyl ether lost to a trailing `x 3`. The label still shows every word
+    that was typed; only the search term is the bare name.
+    """
+
+    def test_a_trailing_comment_does_not_cost_the_row_its_hazards(self):
+        data = assessed("sodium azide 0.5 g  # DO NOT put down the sink\n",
+                        lookup=looker({"sodium azide": pubchem("sodium azide", "H300", "H410")}))
+        row = data["substances"][0]
+        self.assertEqual(row["name"], "sodium azide # DO NOT put down the sink")
+        self.assertIn("H300", row["codes"])
+        self.assertFalse(row["unknown"])
+        # And the fold is never silent: the leftover text is in the review.
+        self.assertTrue(any("DO NOT put down the sink" in line and "own line" in line
+                            for line in data["review"]), data["review"])
+
+    def test_a_grade_after_a_comma_does_not_cost_the_row_its_hazards(self):
+        data = assessed("sodium borohydride, 95%, 0.80 g\n",
+                        lookup=looker({"sodium borohydride":
+                                       pubchem("sodium borohydride", "H260", "H301", "H314")}))
+        row = data["substances"][0]
+        self.assertEqual(row["name"], "sodium borohydride, 95%")
+        self.assertEqual(row["amount"], "0.80 g")
+        self.assertIn("H314", row["codes"])
+        self.assertFalse(row["unknown"])
 
 
 # --------------------------------------------------------------------------
