@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+
+# Kept local: it carries snippets of the private paper-to-order app.
+original-change.patch
