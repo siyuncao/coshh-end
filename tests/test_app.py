@@ -13,6 +13,7 @@ the same injected fakes the reader's own tests use.
 """
 
 import json
+import os
 import unittest
 
 from fastapi.testclient import TestClient
@@ -393,6 +394,136 @@ class RenderingTest(unittest.TestCase):
         ascii_name, _full = webapp.filename_for({"title": "\u03b1\u03b2\u03b3"})
         ascii_name.encode("latin-1")
         self.assertEqual("COSHH-coshh.docx", ascii_name)
+
+
+class ApiKeyTest(unittest.TestCase):
+    """The visitor brings the key; the server never keeps it or repeats it."""
+
+    FAKE_KEY = "sk-ant-notarealkey-0123456789"
+
+    def setUp(self):
+        self.client = TestClient(webapp.app)
+        self.env = dict(os.environ)
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        self.calls = []
+        self.real_assess = webapp.manual.assess
+
+    def tearDown(self):
+        webapp.manual.assess = self.real_assess
+        os.environ.clear()
+        os.environ.update(self.env)
+
+    def record(self, raises=None):
+        """Stand in for `manual.assess` and remember how it was called.
+
+        The fixture is built *before* the stand-in goes in, because building it
+        runs the real `manual.assess` with the offline fakes.
+        """
+        result = assessment()
+
+        def fake(text, **kwargs):
+            self.calls.append(kwargs)
+            if raises is not None:
+                raise raises
+            return result
+        webapp.manual.assess = fake
+
+    # -- the page ----------------------------------------------------------
+
+    def test_the_page_offers_a_password_box_for_the_key(self):
+        body = self.client.get("/").text
+        self.assertIn('type="password"', body)
+        self.assertIn('name="api_key"', body)
+
+    def test_the_page_says_where_the_key_goes_and_where_it_stays(self):
+        body = self.client.get("/").text
+        self.assertIn("never written to disk", body)
+        self.assertIn("localStorage", body)
+
+    def test_the_page_says_where_to_get_a_key(self):
+        self.assertIn("console.anthropic.com", self.client.get("/").text)
+
+    def test_the_page_remembers_the_key_in_this_browser_only(self):
+        body = self.client.get("/").text
+        self.assertIn("localStorage.setItem", body)
+        self.assertIn("localStorage.getItem", body)
+
+    def test_the_page_says_the_server_is_paying_when_it_has_its_own_key(self):
+        os.environ["ANTHROPIC_API_KEY"] = self.FAKE_KEY
+        body = self.client.get("/").text
+        self.assertIn("server has its own Anthropic key", body)
+        self.assertIn("optional", body)
+
+    def test_the_server_key_is_never_rendered_into_the_page(self):
+        os.environ["ANTHROPIC_API_KEY"] = self.FAKE_KEY
+        self.assertNotIn(self.FAKE_KEY, self.client.get("/").text)
+
+    # -- the request -------------------------------------------------------
+
+    def test_no_key_anywhere_is_refused_before_any_model_call(self):
+        self.record()
+        response = self.client.post("/draft", data={"manual": "Dissolve toluene."})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Anthropic API key", response.text)
+        self.assertEqual([], self.calls)
+
+    def test_the_visitors_key_is_what_the_model_call_is_made_with(self):
+        self.record()
+        response = self.client.post(
+            "/draft", data={"manual": "Dissolve toluene.", "api_key": self.FAKE_KEY})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.FAKE_KEY, self.calls[0]["api_key"])
+
+    def test_the_key_never_comes_back_in_the_page(self):
+        self.record()
+        response = self.client.post(
+            "/draft", data={"manual": "Dissolve toluene.", "api_key": self.FAKE_KEY})
+        self.assertNotIn(self.FAKE_KEY, response.text)
+        self.assertNotIn("api_key", response.text)
+
+    def test_a_key_the_sdk_echoed_into_an_error_is_redacted(self):
+        self.record(raises=RuntimeError(
+            "401 invalid x-api-key {}".format(self.FAKE_KEY)))
+        response = self.client.post(
+            "/draft", data={"manual": "Dissolve toluene.", "api_key": self.FAKE_KEY})
+        self.assertEqual(response.status_code, 400)
+        self.assertNotIn(self.FAKE_KEY, response.text)
+        self.assertIn("redacted", response.text)
+
+    def test_the_servers_own_key_is_used_when_the_visitor_gives_none(self):
+        os.environ["ANTHROPIC_API_KEY"] = self.FAKE_KEY
+        self.record()
+        response = self.client.post("/draft", data={"manual": "Dissolve toluene."})
+        self.assertEqual(response.status_code, 200)
+        # None, not the environment's value copied out: the SDK reads the
+        # environment itself, so the key never passes through this code.
+        self.assertIsNone(self.calls[0]["api_key"])
+
+    def test_nothing_on_the_server_holds_the_key_after_the_request(self):
+        self.record()
+        self.client.post("/draft",
+                         data={"manual": "Dissolve toluene.", "api_key": self.FAKE_KEY})
+        for name in dir(webapp):
+            value = getattr(webapp, name)
+            if isinstance(value, str):
+                self.assertNotIn(self.FAKE_KEY, value, name)
+        self.assertNotEqual(self.FAKE_KEY, os.environ.get("ANTHROPIC_API_KEY"))
+
+    def test_an_empty_key_box_is_the_same_as_no_key(self):
+        self.record()
+        response = self.client.post(
+            "/draft", data={"manual": "Dissolve toluene.", "api_key": "   "})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Anthropic API key", response.text)
+        self.assertEqual([], self.calls)
+
+    def test_an_empty_paste_is_refused_even_with_a_key(self):
+        self.record()
+        response = self.client.post(
+            "/draft", data={"manual": "  ", "api_key": self.FAKE_KEY})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Nothing to read", response.text)
+        self.assertEqual([], self.calls)
 
 
 class UploadTest(unittest.TestCase):

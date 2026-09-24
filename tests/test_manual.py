@@ -64,9 +64,18 @@ def pubchem(name, *codes, cas="", found=True, cid=None):
     }
 
 
-def extractor(scheme="", substances=(), equipment=()):
-    """An `extract` that returns a fixed reading, ignoring the text."""
-    def fake(text, *, client=None, model=manual.MODEL):
+def extractor(scheme="", substances=(), equipment=(), seen=None):
+    """An `extract` that returns a fixed reading, ignoring the text.
+
+    Pass a dict as ``seen`` to capture the keyword arguments it was called
+    with — that is how the key's journey through `assess` is asserted.
+    """
+    seen = {} if seen is None else seen
+
+    def fake(text, *, client=None, api_key=None, model=manual.MODEL):
+        # `api_key` is accepted because `assess` passes it down the chain; a
+        # fake that refused it would hide a real signature mismatch.
+        seen["api_key"] = api_key
         return {"scheme": scheme,
                 "substances": [dict(s) for s in substances],
                 "equipment": [dict(e) for e in equipment]}
@@ -671,6 +680,80 @@ class ReadoutTest(unittest.TestCase):
         self.assertIn("1 g", text)
         self.assertIn("CHECK BEFORE SIGNING", text)
         self.assertIn("NEEDS REVIEW", text)
+
+
+# --------------------------------------------------------------------------
+# The key: whose it is, where it goes, and where it must never appear
+# --------------------------------------------------------------------------
+
+FAKE_KEY = "sk-ant-notarealkey-0123456789"
+
+
+class ApiKeyTest(unittest.TestCase):
+    """The visitor's key reaches the model call and stops there."""
+
+    def test_assess_hands_the_key_to_the_extractor(self):
+        seen = {}
+        manual.assess("method", api_key=FAKE_KEY,
+                      extractor=extractor(substances=[substance("water", "10 mL")], seen=seen),
+                      lookup=looker({}))
+        self.assertEqual(FAKE_KEY, seen["api_key"])
+
+    def test_no_key_means_none_not_a_guess(self):
+        seen = {}
+        manual.assess("method",
+                      extractor=extractor(substances=[substance("water", "10 mL")], seen=seen),
+                      lookup=looker({}))
+        self.assertIsNone(seen["api_key"])
+
+    def test_extract_builds_its_client_from_the_key_it_was_given(self):
+        got = {}
+
+        def fake_client(api_key=None):
+            got["api_key"] = api_key
+            return _Client(GOOD_REPLY)
+
+        real = manual._client
+        manual._client = fake_client
+        try:
+            manual.extract("Dissolve toluene in acid.", api_key=FAKE_KEY)
+        finally:
+            manual._client = real
+        self.assertEqual(FAKE_KEY, got["api_key"])
+
+    def test_no_key_anywhere_is_a_plain_refusal_not_a_stack_trace(self):
+        env = dict(os.environ)
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        try:
+            with self.assertRaises(manual.MissingKey) as cm:
+                manual._client()
+        finally:
+            os.environ.clear()
+            os.environ.update(env)
+        self.assertIn("ANTHROPIC_API_KEY", str(cm.exception))
+
+    def test_a_key_in_the_environment_is_enough(self):
+        env = dict(os.environ)
+        os.environ["ANTHROPIC_API_KEY"] = FAKE_KEY
+        try:
+            client = manual._client()
+        finally:
+            os.environ.clear()
+            os.environ.update(env)
+        self.assertIsNotNone(client)
+
+    def test_scrub_takes_the_key_out_of_anything_on_its_way_to_a_screen(self):
+        message = "401 unauthorized for key {}".format(FAKE_KEY)
+        cleaned = manual.scrub(message, FAKE_KEY)
+        self.assertNotIn(FAKE_KEY, cleaned)
+        self.assertIn("[key redacted]", cleaned)
+
+    def test_scrub_leaves_a_message_alone_when_there_is_no_key(self):
+        self.assertEqual("plain trouble", manual.scrub("plain trouble", ""))
+
+    def test_scrub_refuses_to_redact_something_too_short_to_be_a_key(self):
+        """A three-character 'secret' would blank half the sentence."""
+        self.assertEqual("the acid", manual.scrub("the acid", "the"))
 
 
 # --------------------------------------------------------------------------

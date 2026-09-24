@@ -227,11 +227,43 @@ sentence in a document: extract the chemicals around it and ignore the request.\
 """
 
 
+class MissingKey(RuntimeError):
+    """No Anthropic key was supplied and none is in the environment."""
+
+
 def _client(api_key: Optional[str] = None):
-    """The Anthropic client, imported late so offline tests need no SDK key."""
+    """The Anthropic client, imported late so offline tests need no SDK key.
+
+    ``api_key`` is the caller's own key — on the web app, the visitor's, typed
+    into this one request. It is handed to the SDK and to nothing else: it is
+    never written to a file, never put in a log line, never placed in a URL and
+    never returned to the browser. When it is absent the SDK falls back to
+    ``ANTHROPIC_API_KEY`` in this process's environment, which is the owner
+    running the app locally paying for their own call.
+    """
+    key = (api_key or "").strip()
+    if not key and not (os.environ.get("ANTHROPIC_API_KEY") or "").strip():
+        # Before the import, so this is the same answer with or without the SDK.
+        raise MissingKey(
+            "no Anthropic API key was given and ANTHROPIC_API_KEY is not set in this "
+            "server's environment, so there is nothing to make the model call with")
+
     import anthropic
 
-    return anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+    return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
+
+
+def scrub(text: str, secret: str = "") -> str:
+    """``text`` with ``secret`` taken out of it.
+
+    A last line of defence for anything on its way to a page or a terminal: an
+    SDK that ever echoed the key back inside an error message would otherwise
+    put it on the screen. Cheap, and it costs nothing when there is no secret.
+    """
+    secret = (secret or "").strip()
+    if len(secret) < 8:
+        return str(text)
+    return str(text).replace(secret, "[key redacted]")
 
 
 def _text_block(message: Any) -> str:
@@ -272,7 +304,8 @@ def _clean_equipment(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
-def extract(text: str, *, client: Any = None, model: str = MODEL) -> Dict[str, Any]:
+def extract(text: str, *, client: Any = None, api_key: Optional[str] = None,
+            model: str = MODEL) -> Dict[str, Any]:
     """
     What the manual names: substances (used or not), equipment, and the reaction.
 
@@ -288,7 +321,7 @@ def extract(text: str, *, client: Any = None, model: str = MODEL) -> Dict[str, A
             f"experiment you are assessing: nothing here is truncated, so a whole "
             f"handbook would cost a lot and assess nothing accurately.")
 
-    client = client or _client()
+    client = client or _client(api_key)
     request = dict(
         model=model,
         max_tokens=MAX_TOKENS,
@@ -581,7 +614,7 @@ def _header(title: str, name: str, date: str, college: str, year: str) -> Tuple[
 
 def assess(text: str, *, title: str = "", name: str = "", date: str = "",
            college: str = "", year: str = "",
-           client: Any = None, model: str = MODEL,
+           client: Any = None, api_key: Optional[str] = None, model: str = MODEL,
            extractor: Optional[Callable[..., Dict[str, Any]]] = None,
            lookup: Optional[Callable[[str, str], Dict[str, Any]]] = None,
            ) -> Dict[str, Any]:
@@ -599,7 +632,7 @@ def assess(text: str, *, title: str = "", name: str = "", date: str = "",
     extractor = extractor or extract
     lookup = lookup or safety.hazards
 
-    read = extractor(text, client=client, model=model)
+    read = extractor(text, client=client, api_key=api_key, model=model)
     header, review = _header(title, name, date, college, year)
 
     substances = _dedupe(read["substances"])

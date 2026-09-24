@@ -15,6 +15,16 @@ COSHH form is a document somebody signs. So the tool never goes from text to
 Word in one step. It shows its work, a human corrects it, and only then is there
 a file. `Approved By` is left blank by the writer and cannot be filled in here.
 
+Reading prose is the only step that needs a language model, and the model call
+is the only step that costs money. So the key is the visitor's: `POST /draft`
+takes an Anthropic API key from the submitted form, hands it to that one call,
+and forgets it when the request ends. It is never written to disk, never logged,
+never put in a URL, and never echoed back into a page — the key lives in the
+visitor's own browser (localStorage) and nowhere on this server. If the process
+running the app has `ANTHROPIC_API_KEY` set, that is the owner running it
+locally and paying for their own call; the field then becomes optional and the
+page says so.
+
 Nothing is written to disk. The generated document is built in a temporary file,
 read into memory, and the temporary file is deleted before the response is sent;
 the pasted manual is never saved at all.
@@ -43,9 +53,10 @@ from coshh import docx_form, manual, rules
 
 app = FastAPI(title="COSHH draft", docs_url=None, redoc_url=None)
 
-#: The chemist's own template. `coshh/docx_form.py` ships the default path;
-#: point `COSHH_TEMPLATE` somewhere else to use a different form. The template
-#: itself is never committed — see the README.
+#: The form to write onto. `None` means the neutral form this repo ships,
+#: `coshh/docx_form.DEFAULT_TEMPLATE` — the same tables and checkbox lists,
+#: worded for no particular institution. A chemist with their own COSHH form
+#: points `COSHH_TEMPLATE` at it; that file is never committed (see README).
 TEMPLATE_PATH = os.environ.get("COSHH_TEMPLATE") or None
 
 #: A paste box is not an upload endpoint; refuse anything absurd early.
@@ -61,6 +72,90 @@ PRIVACY_NOTE = (
     "request, and the document is built in a temporary file that is deleted "
     "before it reaches you."
 )
+
+#: Where the console hands out keys. Linked, never posted to.
+KEY_CONSOLE_URL = "https://console.anthropic.com/settings/keys"
+
+#: The one plain sentence the page owes the visitor about their key.
+KEY_NOTE = (
+    "Your key is sent with this one request, used for the single model call that reads "
+    "your manual, and then forgotten: it is never written to disk, never logged, never "
+    "put in a web address and never sent back to this page. It is remembered in your own "
+    "browser (localStorage) so you need not retype it, and you can clear it there."
+)
+
+#: Shown instead when the server carries its own key.
+KEY_SERVER_NOTE = (
+    "This server has its own Anthropic key and is paying for the model call, so you can "
+    "leave this blank. A key you type here is used instead, for this request only, and is "
+    "never written to disk, never logged and never sent back to this page."
+)
+
+#: What the visitor is told when there is no key at all to call the model with.
+KEY_MISSING_DETAIL = (
+    "Reading a manual is the one step that needs a language model, and a model call needs "
+    "a key. Paste an Anthropic API key into the key box and try again — or use the "
+    "substance list instead, which needs no key and no model. Nothing has been read, and "
+    "nothing has been charged."
+)
+
+#: Fills the key box back in from this browser, and remembers what was typed.
+#: Kept out of `index`'s format string so its braces need no escaping.
+KEY_SCRIPT = """
+<script>
+(function () {
+  var box = document.getElementById("api_key");
+  if (!box) { return; }
+  var keep = document.getElementById("api_key_remember");
+  var NAME = "coshh.anthropic-api-key";
+  try {
+    var saved = window.localStorage.getItem(NAME);
+    if (saved) { box.value = saved; }
+  } catch (e) { /* private mode, or storage refused: type it each time */ }
+  var form = box.form;
+  if (!form) { return; }
+  form.addEventListener("submit", function () {
+    try {
+      if (keep && keep.checked && box.value) {
+        window.localStorage.setItem(NAME, box.value);
+      } else {
+        window.localStorage.removeItem(NAME);
+      }
+    } catch (e) { /* nothing to do: the key still goes with the request */ }
+  });
+})();
+</script>
+"""
+
+
+def server_has_key() -> bool:
+    """True when the process running this app carries its own Anthropic key.
+
+    Read per request rather than at import, so a test — or the owner starting
+    the server without one — sees the truth rather than a cached answer.
+    """
+    return bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip())
+
+
+def key_field() -> str:
+    """The password box, its one honest sentence, and where to get a key."""
+    note = KEY_SERVER_NOTE if server_has_key() else KEY_NOTE
+    label = ("Anthropic API key (optional — the server is paying)"
+             if server_has_key() else "Your Anthropic API key")
+    return (
+        "<h2>The key for the model call</h2>"
+        "<p class=\"sub\">{note} "
+        "<a href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer\">"
+        "Get a key</a>.</p>"
+        "<label for=\"api_key\">{label}</label>"
+        "<input type=\"password\" id=\"api_key\" name=\"api_key\" "
+        "autocomplete=\"off\" autocapitalize=\"off\" autocorrect=\"off\" "
+        "spellcheck=\"false\" placeholder=\"sk-ant-...\">"
+        "<p class=\"why\" style=\"margin:.45rem 0 0\">"
+        "<label style=\"display:inline-flex; gap:.4rem; align-items:center; margin:0\">"
+        "<input type=\"checkbox\" id=\"api_key_remember\" checked> "
+        "Remember it in this browser</label></p>"
+    ).format(note=esc(note), url=esc(KEY_CONSOLE_URL), label=esc(label))
 
 
 # --------------------------------------------------------------------------
@@ -114,7 +209,7 @@ a { color: var(--accent); }
 .alarm ul { margin: .4rem 0 0; padding-left: 1.1rem; }
 .alarm li { margin: .3rem 0; font-size: .9rem; }
 label { display: block; font-size: .85rem; color: var(--soft); margin-bottom: .2rem; }
-input[type=text], input[type=date], textarea, select {
+input[type=text], input[type=date], input[type=password], textarea, select {
   width: 100%; padding: .5rem .6rem; background: var(--field); color: var(--ink);
   border: 1px solid var(--rule); border-radius: 3px; font: inherit; font-size: .95rem;
 }
@@ -188,7 +283,9 @@ HEADER_FIELDS: Tuple[Tuple[str, str, str], ...] = (
     ("title", "Title of experiment", "text"),
     ("name", "Name", "text"),
     ("date", "Date", "text"),
-    ("college", "College", "text"),
+    # The shipped form prints "Department" over this cell and a college's own
+    # form prints "College"; the value is copied into the same place either way.
+    ("college", "Department / College", "text"),
 )
 
 
@@ -223,6 +320,8 @@ up in PubChem, and proposes the ticks. You check every one of them before there 
   <p class="sub">Copied onto the form exactly as you type them. Nothing here is guessed.</p>
   {header}
 
+  {keyfield}
+
   <h2>The procedure</h2>
   <p class="sub">Paste the experimental section, or upload a <code>.txt</code> or
   <code>.docx</code>. Quantities are transcribed word for word, never converted.</p>
@@ -235,6 +334,7 @@ up in PubChem, and proposes the ticks. You check every one of them before there 
     <span class="sub" style="margin:0">One model call, then a PubChem lookup per substance.</span>
   </div>
 </form>
+{keyscript}
 
 <h2>What this does not do</h2>
 <ul class="sub" style="padding-left:1.1rem">
@@ -244,7 +344,8 @@ up in PubChem, and proposes the ticks. You check every one of them before there 
       and you fill it in from the supplier's safety data sheet.</li>
   <li>It does not sign. <code>Approved By</code> stays blank.</li>
 </ul>
-""".format(standing=esc(STANDING_NOTE), header=header_inputs({}))
+""".format(standing=esc(STANDING_NOTE), header=header_inputs({}),
+           keyfield=key_field(), keyscript=KEY_SCRIPT)
     return HTMLResponse(page("COSHH draft", body))
 
 
@@ -519,25 +620,37 @@ async def draft(request: Request) -> HTMLResponse:
         return error_page("Nothing to read",
                           "Paste the experimental procedure, or upload a .txt or .docx.")
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        return error_page(
-            "No API key",
-            "ANTHROPIC_API_KEY is not set in the environment this server is running in. "
-            "Start it with the key loaded; see the README.")
+    # The visitor's own key, for this one call. It is never logged, never put
+    # in a URL, never written to disk and never rendered back into a page: the
+    # only thing it is passed to is the model call, and `manual.scrub` takes it
+    # out of any message on its way to the screen in case the SDK echoes it.
+    api_key = str(form.get("api_key") or "").strip()
+    if not api_key and not server_has_key():
+        return error_page("This needs an Anthropic API key", KEY_MISSING_DETAIL)
+
+    def said(exc: Exception, with_type: bool = False) -> str:
+        detail = "{}: {}".format(type(exc).__name__, exc) if with_type else str(exc)
+        return manual.scrub(detail, api_key)
 
     try:
         assessment = manual.assess(
             text,
             title=str(form.get("title") or ""), name=str(form.get("name") or ""),
             date=str(form.get("date") or ""), college=str(form.get("college") or ""),
-            year=str(form.get("year") or ""))
+            year=str(form.get("year") or ""),
+            api_key=api_key or None)
+    except manual.MissingKey as exc:
+        return error_page("This needs an Anthropic API key", said(exc))
     except manual.ManualTooLong as exc:
-        return error_page("That procedure is too long", str(exc))
+        return error_page("That procedure is too long", said(exc))
     except manual.ExtractionFailed as exc:
-        return error_page("The manual could not be read", str(exc))
+        return error_page("The manual could not be read", said(exc))
     except Exception as exc:
-        return error_page("Something went wrong reading the manual",
-                          "{}: {}".format(type(exc).__name__, exc))
+        return error_page("Something went wrong reading the manual", said(exc, True))
+    finally:
+        # Out of this frame as soon as the call is over. Nothing else on this
+        # server ever holds it: no cache, no session, no module-level anything.
+        api_key = ""
 
     return HTMLResponse(page("Check the draft", draft_body(assessment)))
 
@@ -674,8 +787,9 @@ async def document(request: Request) -> Response:
     except FileNotFoundError:
         return error_page(
             "No template",
-            "The COSHH template was not found at {}. Put your own .docx there, or set "
-            "COSHH_TEMPLATE to its path — see the README.".format(
+            "The COSHH template was not found at {}. This app ships a neutral form at "
+            "templates/generic-coshh-template.docx and writes onto that unless "
+            "COSHH_TEMPLATE points somewhere else — see the README.".format(
                 TEMPLATE_PATH or docx_form.DEFAULT_TEMPLATE))
     except Exception as exc:
         return error_page("The document could not be written",
